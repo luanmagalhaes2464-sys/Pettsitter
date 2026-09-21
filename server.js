@@ -198,7 +198,7 @@ function icsNextDate(v){const x=new Date(String(v)+'T12:00:00-03:00');x.setDate(
 function icsStamp(v=new Date()){const x=new Date(v);return x.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z$/,'Z')}
 
 app.get('/calendar/:token.ics',needDb,async(req,res)=>{try{
-  const expected=process.env.CALENDAR_FEED_TOKEN||process.env.SETUP_TOKEN;
+  const expected=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');
   if(!expected||req.params.token!==expected)return res.status(404).send('Not found');
   const q=await pool.query("SELECT * FROM cps_bookings WHERE status <> 'cancelled' ORDER BY start_date,created_at");
   const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Casal Pet Sitter//Agenda//PT-BR','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:Casal Pet Sitter','X-WR-TIMEZONE:America/Sao_Paulo'];
