@@ -25,7 +25,7 @@ app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc:["'self'"], s
 app.use(express.json({ limit: '80kb' }));
 app.use(express.urlencoded({ extended: false, limit: '80kb' }));
 const PgStore = connectPgSimple(session);
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.createHash('sha256').update('casal-pet-sitter-session:'+DB).digest('hex');
 app.use(session({ store: DB ? new PgStore({ pool, tableName:'cps_session', createTableIfMissing:true }) : undefined, secret:SESSION_SECRET, resave:false, saveUninitialized:false, name:'cps.sid', cookie:{ httpOnly:true, secure:PROD, sameSite:'lax', maxAge:12*60*60*1000 } }));
 app.use(express.static(path.join(__dirname,'public'), { maxAge: PROD ? '1h' : 0 }));
 
