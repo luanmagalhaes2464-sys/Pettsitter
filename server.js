@@ -99,6 +99,23 @@ function mapBooking(r){ return {id:r.id,service:r.service,serviceLabel:SERVICE[r
 app.get('/api/health',async(_req,res)=>{let db=false;if(DB){try{await pool.query('SELECT 1');db=true}catch{}}res.json({ok:true,db,version:'2.1.0'})});
 app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{const p=bookingSchema.parse(req.body);const today=new Date();today.setHours(0,0,0,0);if(d(p.startDate)<today||d(p.endDate)<d(p.startDate))return res.status(400).json({error:'Confira as datas informadas.'});const price=calc(p.service,p.startDate,p.endDate,p.visits),id=crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);let whatsappSent=false,calendarEventId=null;try{whatsappSent=await sendWhatsApp(WIFE_WHATSAPP,bookingMsg(b))}catch(e){console.error(e.message)}try{calendarEventId=await createCalendar(b)}catch(e){console.error(e.message)}await pool.query('UPDATE cps_bookings SET whatsapp_sent=$1,calendar_event_id=$2,updated_at=NOW() WHERE id=$3',[whatsappSent,calendarEventId,id]);res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,whatsappSent,calendarCreated:Boolean(calendarEventId),whatsappFallbackUrl:'https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(bookingMsg(b))});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados informados.'});console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});}});
 
+app.post('/api/setup',needDb,async(req,res)=>{try{
+  const configured=await pool.query('SELECT COUNT(*)::int AS n FROM cps_users WHERE active=TRUE');
+  if(Number(configured.rows[0].n)>0)return res.status(409).json({error:'A configuração inicial já foi concluída.'});
+  const token=String(req.body.setupToken||'');
+  if(!process.env.SETUP_TOKEN||token!==process.env.SETUP_TOKEN)return res.status(403).json({error:'Código de configuração inválido.'});
+  const lp=String(req.body.luanPassword||''),ip=String(req.body.isabelaPassword||'');
+  if(lp.length<10||ip.length<10)return res.status(400).json({error:'Use senhas com pelo menos 10 caracteres.'});
+  const lhash=await bcrypt.hash(lp,12),ihash=await bcrypt.hash(ip,12);
+  await pool.query('BEGIN');
+  try{
+    await pool.query("INSERT INTO cps_users(name,email,password_hash,role) VALUES('Luan',$1,$2,'admin')",[process.env.ADMIN_EMAIL||'luanmagalhaes2464@gmail.com',lhash]);
+    await pool.query("INSERT INTO cps_users(name,email,password_hash,role) VALUES('Isabela',$1,$2,'admin')",[process.env.SECOND_ADMIN_EMAIL||'belaisapr@gmail.com',ihash]);
+    await pool.query('COMMIT');
+  }catch(e){await pool.query('ROLLBACK');throw e}
+  res.status(201).json({ok:true});
+}catch(e){console.error(e);res.status(500).json({error:'Não foi possível criar os acessos.'})}});
+
 app.post('/api/auth/login',loginLimiter,needDb,async(req,res)=>{const email=text(req.body.email,200).toLowerCase(),password=String(req.body.password||'').slice(0,300);if(!email||!password)return res.status(400).json({error:'Informe e-mail e senha.'});const q=await pool.query('SELECT id,name,email,password_hash,role,active FROM cps_users WHERE email=$1',[email]),u=q.rows[0];if(!u||!u.active||!(await bcrypt.compare(password,u.password_hash)))return res.status(401).json({error:'E-mail ou senha inválidos.'});req.session.regenerate(err=>{if(err)return res.status(500).json({error:'Falha ao iniciar sessão.'});req.session.userId=u.id;req.session.csrfToken=crypto.randomBytes(24).toString('hex');res.json({ok:true,user:{id:u.id,name:u.name,email:u.email,role:u.role},csrfToken:req.session.csrfToken});});});
 app.get('/api/auth/me',needAuth,needDb,async(req,res)=>{const q=await pool.query('SELECT id,name,email,role FROM cps_users WHERE id=$1 AND active=TRUE',[req.session.userId]);if(!q.rowCount)return req.session.destroy(()=>res.status(401).json({error:'Sessão inválida.'}));res.json({user:q.rows[0],csrfToken:csrf(req)});});
 app.post('/api/auth/logout',needAuth,needCsrf,(req,res)=>req.session.destroy(()=>{res.clearCookie('cps.sid');res.json({ok:true})}));
@@ -175,6 +192,7 @@ app.get('/api/admin/finance',needAuth,needDb,async(req,res)=>{const [p,e]=await 
 
 app.get('/admin',(_req,res)=>res.sendFile(path.join(__dirname,'public','admin.html')));
 app.get('/login',(_req,res)=>res.sendFile(path.join(__dirname,'public','login.html')));
+app.get('/setup',(_req,res)=>res.sendFile(path.join(__dirname,'public','setup.html')));
 app.get('/privacidade',(_req,res)=>res.sendFile(path.join(__dirname,'public','privacy.html')));
 app.use((req,res,next)=>{if(req.path.startsWith('/api/'))return next();res.sendFile(path.join(__dirname,'public','index.html'))});
 app.use((err,_req,res,_next)=>{console.error(err);res.status(500).json({error:'Erro interno.'})});
