@@ -1,0 +1,3 @@
+const form=document.querySelector('#loginForm'),msg=document.querySelector('#loginMessage');
+(async()=>{const r=await fetch('/api/auth/me');if(r.ok)location.href='/admin'})();
+form.addEventListener('submit',async e=>{e.preventDefault();msg.className='form-message';msg.textContent='Entrando...';const data=Object.fromEntries(new FormData(form).entries());try{const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw new Error(j.error||'Não foi possível entrar');location.href='/admin'}catch(err){msg.className='form-message error';msg.textContent=err.message}});
