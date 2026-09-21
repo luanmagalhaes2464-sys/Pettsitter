@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Casal Pet Sitter em Viçosa-MG: pet sitter, passeios, hospedagem e vacinação com cuidado próximo e acompanhamento profissional." />
+  <meta name="theme-color" content="#B08A58" />
+  <title>Casal Pet Sitter | Viçosa-MG</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#inicio" aria-label="Casal Pet Sitter - início">
+      <span class="brand-logo">🐾</span>
+      <span><strong>Casal Pet Sitter</strong><small>Viçosa • MG</small></span>
+    </a>
+    <nav class="nav">
+      <a href="#servicos">Serviços</a><a href="#agendar">Agendar</a><a href="#sobre">Sobre nós</a>
+      <a class="nav-cta" href="https://wa.me/5531996377552" target="_blank" rel="noreferrer">WhatsApp</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="inicio" class="hero section-shell">
+      <div class="hero-copy">
+        <div class="eyebrow">Cuidado profissional, carinho de verdade</div>
+        <h1>Seu pet bem cuidado. Você tranquilo.</h1>
+        <p>Pet sitter, passeios, hospedagem e vacinação em Viçosa-MG. Atendimento próximo, atualizações com fotos e atenção ao bem-estar de cada animal.</p>
+        <div class="hero-actions"><a class="btn btn-primary" href="#agendar">Fazer pré-agendamento</a><a class="btn btn-ghost" href="#servicos">Ver serviços</a></div>
+        <div class="trust-row"><span>🩺 Médica-veterinária</span><span>📸 Fotos e notícias</span><span>🏡 Cuidado no lar</span></div>
+      </div>
+      <div class="hero-visual">
+        <div class="pet-bubbles"><span>🐶</span><span>🐱</span><span>🐰</span><span>🦜</span></div>
+        <div class="couple-card"><div class="couple-icon">👩🏻‍⚕️ <span>♥</span> 👨🏻‍💼</div><h3>Enquanto você vai,<br>o carinho fica.</h3><p>Cuidado pensado para a rotina de cada pet e a tranquilidade de cada tutor.</p></div>
+      </div>
+    </section>
+
+    <section id="servicos" class="section section-tint"><div class="section-shell">
+      <div class="section-heading"><div class="eyebrow">Serviços</div><h2>Escolha o cuidado ideal</h2><p>Preços transparentes e estimativa automática no pré-agendamento.</p></div>
+      <div class="services-grid">
+        <article class="service-card"><div class="service-icon">🏠</div><h3>Pet sitter</h3><p>Visita ao domicílio com alimentação, água fresca, higiene do ambiente, brincadeiras, companhia e atualização para o tutor.</p><strong>R$ 35 por visita</strong></article>
+        <article class="service-card"><div class="service-icon">🦮</div><h3>Passeio</h3><p>Passeio individual de 30 minutos, respeitando o ritmo, a segurança e a rotina do animal.</p><strong>R$ 50 por passeio</strong></article>
+        <article class="service-card"><div class="service-icon">🐾</div><h3>Pet sitter + passeio</h3><p>Visita completa com passeio adicional de 15 minutos.</p><strong>R$ 50 por visita</strong><small>R$ 35 + R$ 15 do passeio</small></article>
+        <article class="service-card"><div class="service-icon">🧳</div><h3>Hospedagem</h3><p>Ambiente acolhedor, acompanhamento e rotina combinada com o tutor, mediante avaliação prévia.</p><strong>R$ 70/dia • acima de 5 diárias: R$ 65/dia</strong></article>
+        <article class="service-card"><div class="service-icon">💉</div><h3>Vacinação</h3><p>Atendimento realizado pela médica-veterinária conforme avaliação, protocolo indicado e disponibilidade.</p><strong>Valor sob avaliação</strong></article>
+      </div>
+    </div></section>
+
+    <section id="agendar" class="section"><div class="section-shell booking-layout">
+      <div class="booking-intro"><div class="eyebrow">Pré-agendamento</div><h2>Escolha as datas e veja o valor na hora</h2><p>O envio registra uma <strong>pré-solicitação</strong>. A reserva fica confirmada após nosso retorno sobre disponibilidade e detalhes do atendimento.</p>
+        <div class="mini-list"><div>✓ Registro no sistema</div><div>✓ Histórico do atendimento</div><div>✓ Retorno pelo WhatsApp</div></div>
+      </div>
+      <form id="bookingForm" class="booking-card" autocomplete="on">
+        <div class="form-step-title"><span>1</span> Serviço e período</div>
+        <div class="field-grid two"><label>Serviço<select id="service" name="service" required><option value="">Selecione</option><option value="pet_sitter">Pet sitter</option><option value="pet_sitter_passeio">Pet sitter + passeio</option><option value="passeio">Passeio</option><option value="hospedagem">Hospedagem</option><option value="vacinacao">Vacinação</option></select></label><label id="visitsWrap" class="hidden">Visitas por dia<input id="visits" name="visits" type="number" min="1" max="10" value="1" /></label></div>
+        <div class="field-grid two"><label>Data inicial<input id="startDate" name="startDate" type="date" required /></label><label>Data final<input id="endDate" name="endDate" type="date" required /></label></div>
+        <div class="field-hint">Para visitas e passeios, o período é inclusivo. Hospedagem considera as diárias entre entrada e saída, com mínimo de 1 diária.</div>
+        <div class="form-step-title"><span>2</span> Tutor e endereço</div>
+        <div class="field-grid two"><label>Nome completo<input name="tutorName" type="text" required placeholder="Seu nome" /></label><label>Telefone / WhatsApp<input name="phone" type="tel" inputmode="tel" required placeholder="(32) 99999-9999" /></label></div>
+        <div class="field-grid two"><label>Rua e número<input name="street" type="text" required placeholder="Ex.: Rua dos Estudantes, 120" /></label><label>Bairro<input name="neighborhood" type="text" required placeholder="Ex.: Centro" /></label></div>
+        <div class="form-step-title"><span>3</span> Animais</div>
+        <div class="field-grid two"><label>Quantidade de animais<input name="animalCount" type="number" min="1" max="30" value="1" required /></label><label>Quais animais?<input name="animals" type="text" required placeholder="Ex.: 1 cão, 2 gatos e 1 coelho" /></label></div>
+        <label>Observações importantes<textarea name="notes" rows="3" placeholder="Rotina, medicação, comportamento, acesso ao imóvel, necessidades especiais..."></textarea></label>
+        <div class="price-box" aria-live="polite"><div><span>Estimativa</span><small id="priceDetail">Selecione serviço e datas</small></div><strong id="priceTotal">R$ 0,00</strong></div>
+        <label class="consent"><input type="checkbox" required /><span>Autorizo o uso dos dados informados exclusivamente para contato, organização e registro deste atendimento.</span></label>
+        <button class="btn btn-primary btn-wide" type="submit">Confirmar pré-solicitação</button><div id="formMessage" class="form-message" role="status"></div>
+      </form>
+    </div></section>
+
+    <section id="sobre" class="section section-tint"><div class="section-shell about-grid">
+      <div class="about-art"><div class="line-art">⌂<span>🐶</span><span>🐱</span></div><div class="about-badge">Casal<br><strong>Pet Sitter</strong></div></div>
+      <div class="about-copy"><div class="eyebrow">Sobre nós</div><h2>Cuidado com carinho, técnica e organização</h2><p>Somos um casal de Viçosa-MG que transformou o amor pelos animais em um serviço próximo e responsável. Isabela é médica-veterinária, pós-graduada em Saúde Pública e possui complementação pedagógica em Ciências/Biologia. Luan é engenheiro de produção, pós-graduado em Banco de Dados e em Segurança do Trabalho.</p><p>Durante o pet sitter, cuidamos da alimentação e da água, fazemos a higienização necessária do ambiente — inclusive dos espaços onde o pet faz suas necessidades —, brincamos, oferecemos companhia e enviamos fotos e notícias para o tutor acompanhar tudo de perto.</p><p>Nosso objetivo é que você viaje ou cumpra sua rotina com tranquilidade, sabendo que seu pet está sendo cuidado com atenção, afeto e comunicação clara.</p></div>
+    </div></section>
+  </main>
+
+  <footer><div class="section-shell footer-grid"><div><strong>Casal Pet Sitter</strong><p>Viçosa-MG • @petcarecomvet</p></div><div class="footer-links"><a href="https://instagram.com/petcarecomvet" target="_blank" rel="noreferrer">Instagram</a><a href="https://wa.me/5531996377552" target="_blank" rel="noreferrer">WhatsApp</a><a href="/privacidade">Privacidade</a><a href="/login">Área do casal</a></div></div></footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>
