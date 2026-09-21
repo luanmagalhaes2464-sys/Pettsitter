@@ -108,12 +108,13 @@ app.post('/api/setup',needDb,async(req,res)=>{try{
   const lp=String(req.body.luanPassword||''),ip=String(req.body.isabelaPassword||'');
   if(lp.length<10||ip.length<10)return res.status(400).json({error:'Use senhas com pelo menos 10 caracteres.'});
   const lhash=await bcrypt.hash(lp,12),ihash=await bcrypt.hash(ip,12);
-  await pool.query('BEGIN');
+  const client=await pool.connect();
   try{
-    await pool.query("INSERT INTO cps_users(name,email,password_hash,role) VALUES('Luan',$1,$2,'admin')",[process.env.ADMIN_EMAIL||'luanmagalhaes2464@gmail.com',lhash]);
-    await pool.query("INSERT INTO cps_users(name,email,password_hash,role) VALUES('Isabela',$1,$2,'admin')",[process.env.SECOND_ADMIN_EMAIL||'belaisapr@gmail.com',ihash]);
-    await pool.query('COMMIT');
-  }catch(e){await pool.query('ROLLBACK');throw e}
+    await client.query('BEGIN');
+    await client.query("INSERT INTO cps_users(name,email,password_hash,role) VALUES('Luan',$1,$2,'admin')",[process.env.ADMIN_EMAIL||'luanmagalhaes2464@gmail.com',lhash]);
+    await client.query("INSERT INTO cps_users(name,email,password_hash,role) VALUES('Isabela',$1,$2,'admin')",[process.env.SECOND_ADMIN_EMAIL||'belaisapr@gmail.com',ihash]);
+    await client.query('COMMIT');
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
   res.status(201).json({ok:true});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível criar os acessos.'})}});
 
@@ -194,8 +195,9 @@ app.get('/api/admin/finance',needAuth,needDb,async(req,res)=>{const [p,e]=await 
 
 
 function icsEscape(v=''){return String(v).replace(/\\/g,'\\\\').replace(/\r?\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}
-function icsDate(v){const x=new Date(String(v)+'T12:00:00-03:00');return [x.getFullYear(),String(x.getMonth()+1).padStart(2,'0'),String(x.getDate()).padStart(2,'0')].join('')}
-function icsNextDate(v){const x=new Date(String(v)+'T12:00:00-03:00');x.setDate(x.getDate()+1);return [x.getFullYear(),String(x.getMonth()+1).padStart(2,'0'),String(x.getDate()).padStart(2,'0')].join('')}
+function isoDay(v){return v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10)}
+function icsDate(v){return isoDay(v).replace(/-/g,'')}
+function icsNextDate(v){const x=new Date(isoDay(v)+'T12:00:00Z');x.setUTCDate(x.getUTCDate()+1);return x.toISOString().slice(0,10).replace(/-/g,'')}
 function icsStamp(v=new Date()){const x=new Date(v);return x.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z$/,'Z')}
 
 app.get('/calendar/:token.ics',needDb,async(req,res)=>{try{
