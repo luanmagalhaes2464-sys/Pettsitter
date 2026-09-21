@@ -190,6 +190,48 @@ app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const s
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
 app.get('/api/admin/finance',needAuth,needDb,async(req,res)=>{const [p,e]=await Promise.all([pool.query('SELECT p.id,p.booking_id,p.amount,p.method,p.paid_at,p.note,p.created_at,b.tutor_name,b.service FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id ORDER BY p.paid_at DESC,p.created_at DESC LIMIT 500'),pool.query('SELECT id,amount,category,occurred_at,note,created_at FROM cps_expenses ORDER BY occurred_at DESC,created_at DESC LIMIT 500')]);res.json({payments:p.rows.map(x=>({...x,amount:Number(x.amount)})),expenses:e.rows.map(x=>({...x,amount:Number(x.amount)}))});});
 
+
+function icsEscape(v=''){return String(v).replace(/\\/g,'\\\\').replace(/\r?\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}
+function icsDate(v){const x=new Date(String(v)+'T12:00:00-03:00');return [x.getFullYear(),String(x.getMonth()+1).padStart(2,'0'),String(x.getDate()).padStart(2,'0')].join('')}
+function icsNextDate(v){const x=new Date(String(v)+'T12:00:00-03:00');x.setDate(x.getDate()+1);return [x.getFullYear(),String(x.getMonth()+1).padStart(2,'0'),String(x.getDate()).padStart(2,'0')].join('')}
+function icsStamp(v=new Date()){const x=new Date(v);return x.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z$/,'Z')}
+
+app.get('/calendar/:token.ics',needDb,async(req,res)=>{try{
+  const expected=process.env.CALENDAR_FEED_TOKEN||process.env.SETUP_TOKEN;
+  if(!expected||req.params.token!==expected)return res.status(404).send('Not found');
+  const q=await pool.query("SELECT * FROM cps_bookings WHERE status <> 'cancelled' ORDER BY start_date,created_at");
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Casal Pet Sitter//Agenda//PT-BR','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:Casal Pet Sitter','X-WR-TIMEZONE:America/Sao_Paulo'];
+  for(const b of q.rows){
+    const status=STATUS[b.status]||b.status,svc=SERVICE[b.service]||b.service;
+    const details=[
+      'Status: '+status,
+      'Serviço: '+svc,
+      'Tutor: '+b.tutor_name,
+      'Telefone: '+b.phone,
+      'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG',
+      'Animais: '+b.animal_count+' ('+b.animals+')',
+      ['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,
+      'Valor estimado: '+(b.estimated_total==null?'A confirmar':money(b.estimated_total)),
+      b.notes?'Observações: '+b.notes:null
+    ].filter(Boolean).join('\n');
+    lines.push('BEGIN:VEVENT');
+    lines.push('UID:'+b.id+'@casal-pet-sitter');
+    lines.push('DTSTAMP:'+icsStamp(b.created_at));
+    lines.push('LAST-MODIFIED:'+icsStamp(b.updated_at));
+    lines.push('DTSTART;VALUE=DATE:'+icsDate(b.start_date));
+    lines.push('DTEND;VALUE=DATE:'+icsNextDate(b.end_date));
+    lines.push('SUMMARY:'+icsEscape('['+status+'] '+svc+' • '+b.tutor_name));
+    lines.push('LOCATION:'+icsEscape(b.street+', '+b.neighborhood+', Viçosa - MG'));
+    lines.push('DESCRIPTION:'+icsEscape(details));
+    lines.push('END:VEVENT');
+  }
+  lines.push('END:VCALENDAR');
+  res.setHeader('Content-Type','text/calendar; charset=utf-8');
+  res.setHeader('Content-Disposition','inline; filename="casal-pet-sitter.ics"');
+  res.setHeader('Cache-Control','no-store, max-age=0');
+  res.send(lines.join('\r\n'));
+}catch(e){console.error(e);res.status(500).send('Calendar unavailable')}});
+
 app.get('/admin',(_req,res)=>res.sendFile(path.join(__dirname,'public','admin.html')));
 app.get('/login',(_req,res)=>res.sendFile(path.join(__dirname,'public','login.html')));
 app.get('/setup',(_req,res)=>res.sendFile(path.join(__dirname,'public','setup.html')));
