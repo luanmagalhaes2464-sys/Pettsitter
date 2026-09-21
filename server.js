@@ -104,7 +104,69 @@ app.get('/api/auth/me',needAuth,needDb,async(req,res)=>{const q=await pool.query
 app.post('/api/auth/logout',needAuth,needCsrf,(req,res)=>req.session.destroy(()=>{res.clearCookie('cps.sid');res.json({ok:true})}));
 app.post('/api/auth/change-password',needAuth,needCsrf,needDb,async(req,res)=>{const current=String(req.body.currentPassword||''),next=String(req.body.newPassword||'');if(next.length<10)return res.status(400).json({error:'A nova senha deve ter pelo menos 10 caracteres.'});const q=await pool.query('SELECT password_hash FROM cps_users WHERE id=$1',[req.session.userId]);if(!q.rowCount||!(await bcrypt.compare(current,q.rows[0].password_hash)))return res.status(400).json({error:'Senha atual incorreta.'});await pool.query('UPDATE cps_users SET password_hash=$1,updated_at=NOW() WHERE id=$2',[await bcrypt.hash(next,12),req.session.userId]);await audit(req,'change_password','user',req.session.userId);res.json({ok:true});});
 
-app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{const [s,m,r]=await Promise.all([pool.query("SELECT COALESCE((SELECT SUM(amount) FROM cps_payments),0) received,COALESCE((SELECT SUM(amount) FROM cps_expenses),0) expenses,COALESCE((SELECT SUM(estimated_total) FROM cps_bookings WHERE status IN ('confirmed','completed')),0) contracted,(SELECT COUNT(*) FROM cps_bookings) bookings,(SELECT COUNT(DISTINCT phone) FROM cps_bookings) clients"),pool.query("SELECT TO_CHAR(month,'YYYY-MM') month,COALESCE(p.received,0) received,COALESCE(e.expenses,0) expenses FROM generate_series(date_trunc('month',CURRENT_DATE)-interval '5 months',date_trunc('month',CURRENT_DATE),interval '1 month') month LEFT JOIN (SELECT date_trunc('month',paid_at) m,SUM(amount) received FROM cps_payments GROUP BY 1)p ON p.m=month LEFT JOIN (SELECT date_trunc('month',occurred_at) m,SUM(amount) expenses FROM cps_expenses GROUP BY 1)e ON e.m=month ORDER BY month"),pool.query('SELECT * FROM cps_bookings ORDER BY created_at DESC LIMIT 8')]);const x=s.rows[0];res.json({summary:{received:Number(x.received),expenses:Number(x.expenses),net:Number(x.received)-Number(x.expenses),contracted:Number(x.contracted),bookings:Number(x.bookings),clients:Number(x.clients)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),expenses:Number(v.expenses)})),recent:r.rows.map(mapBooking)});});
+app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
+  const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))?String(v):null;
+  const from=validDate(req.query.from),to=validDate(req.query.to);
+  const service=SERVICE[req.query.service]?String(req.query.service):null;
+  const args=[from,to,service];
+  const summarySql=`
+    SELECT
+      COALESCE((SELECT SUM(p.amount) FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id
+        WHERE ($1::date IS NULL OR p.paid_at >= $1::date) AND ($2::date IS NULL OR p.paid_at <= $2::date)
+        AND ($3::text IS NULL OR b.service=$3::text)),0) received,
+      COALESCE((SELECT SUM(e.amount) FROM cps_expenses e
+        WHERE ($1::date IS NULL OR e.occurred_at >= $1::date) AND ($2::date IS NULL OR e.occurred_at <= $2::date)),0) expenses,
+      COALESCE((SELECT SUM(b.estimated_total) FROM cps_bookings b
+        WHERE b.status IN ('confirmed','completed') AND ($1::date IS NULL OR b.start_date >= $1::date)
+        AND ($2::date IS NULL OR b.start_date <= $2::date) AND ($3::text IS NULL OR b.service=$3::text)),0) contracted,
+      (SELECT COUNT(*) FROM cps_bookings b
+        WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+        AND ($3::text IS NULL OR b.service=$3::text)) bookings,
+      (SELECT COUNT(DISTINCT b.phone) FROM cps_bookings b
+        WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+        AND ($3::text IS NULL OR b.service=$3::text)) clients`;
+  const monthSql=`
+    WITH bounds AS (
+      SELECT COALESCE($1::date,date_trunc('month',CURRENT_DATE)-interval '5 months')::date f,
+             COALESCE($2::date,CURRENT_DATE)::date t
+    ), months AS (
+      SELECT generate_series(date_trunc('month',f),date_trunc('month',t),interval '1 month') month FROM bounds
+    ), pay AS (
+      SELECT date_trunc('month',p.paid_at) m,SUM(p.amount) received
+      FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id,bounds
+      WHERE p.paid_at BETWEEN bounds.f AND bounds.t AND ($3::text IS NULL OR b.service=$3::text)
+      GROUP BY 1
+    ), exp AS (
+      SELECT date_trunc('month',e.occurred_at) m,SUM(e.amount) expenses
+      FROM cps_expenses e,bounds WHERE e.occurred_at BETWEEN bounds.f AND bounds.t GROUP BY 1
+    )
+    SELECT TO_CHAR(month,'YYYY-MM') month,COALESCE(pay.received,0) received,COALESCE(exp.expenses,0) expenses
+    FROM months LEFT JOIN pay ON pay.m=month LEFT JOIN exp ON exp.m=month ORDER BY month`;
+  const bookingCountSql=`
+    SELECT service,COUNT(*) bookings FROM cps_bookings b
+    WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+      AND ($3::text IS NULL OR b.service=$3::text)
+    GROUP BY service`;
+  const revenueSql=`
+    SELECT COALESCE(b.service,'unlinked') service,COALESCE(SUM(p.amount),0) received
+    FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id
+    WHERE ($1::date IS NULL OR p.paid_at >= $1::date) AND ($2::date IS NULL OR p.paid_at <= $2::date)
+      AND ($3::text IS NULL OR b.service=$3::text)
+    GROUP BY COALESCE(b.service,'unlinked')`;
+  const recentSql=`
+    SELECT * FROM cps_bookings b
+    WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+      AND ($3::text IS NULL OR b.service=$3::text)
+    ORDER BY created_at DESC LIMIT 12`;
+  const [s,m,bc,rv,r]=await Promise.all([
+    pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args)
+  ]);
+  const x=s.rows[0], counts=new Map(bc.rows.map(v=>[v.service,Number(v.bookings)])), revenues=new Map(rv.rows.map(v=>[v.service,Number(v.received)]));
+  const keys=new Set([...counts.keys(),...revenues.keys()]);
+  const byService=[...keys].filter(k=>k!=='unlinked').map(k=>({service:k,serviceLabel:SERVICE[k]||k,bookings:counts.get(k)||0,received:revenues.get(k)||0})).sort((a,b)=>b.received-a.received);
+  if(revenues.has('unlinked'))byService.push({service:'unlinked',serviceLabel:'Recebimento sem vínculo',bookings:0,received:revenues.get('unlinked')||0});
+  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),net:Number(x.received)-Number(x.expenses),contracted:Number(x.contracted),bookings:Number(x.bookings),clients:Number(x.clients)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
+}catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
 app.get('/api/admin/bookings',needAuth,needDb,async(req,res)=>{const st=text(req.query.status,30),search=text(req.query.search,100),params=[],where=[];if(st&&STATUS_KEYS.includes(st)){params.push(st);where.push('status=$'+params.length)}if(search){params.push('%'+search+'%');where.push('(tutor_name ILIKE $'+params.length+' OR phone ILIKE $'+params.length+' OR animals ILIKE $'+params.length+')')}const q=await pool.query('SELECT * FROM cps_bookings '+(where.length?'WHERE '+where.join(' AND '):'')+' ORDER BY start_date DESC,created_at DESC LIMIT 500',params);res.json({bookings:q.rows.map(mapBooking)});});
 app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{const st=text(req.body.status,30);if(!STATUS_KEYS.includes(st))return res.status(400).json({error:'Status inválido.'});const q=await pool.query('UPDATE cps_bookings SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[st,req.params.id]);if(!q.rowCount)return res.status(404).json({error:'Agendamento não encontrado.'});await audit(req,'update_booking_status','booking',req.params.id,{status:st});res.json({booking:mapBooking(q.rows[0])});});
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
