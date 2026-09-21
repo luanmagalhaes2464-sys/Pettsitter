@@ -191,6 +191,46 @@ app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{co
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
 app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host');res.json({database:true,whatsappAutomatic:Boolean(process.env.WHATSAPP_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID),googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
+
+app.get('/api/admin/vaccines',needAuth,needDb,async(req,res)=>{try{
+  const [due,cards]=await Promise.all([
+    pool.query(`SELECT p.pet_name,p.species,p.tutor_name,p.tutor_phone,p.public_token,v.vaccine_name,v.next_due_date
+      FROM cps_vaccinations v JOIN cps_pets p ON p.id=v.pet_id
+      WHERE v.next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE+30
+      ORDER BY v.next_due_date,p.pet_name`),
+    pool.query(`SELECT p.id,p.pet_name,p.species,p.tutor_name,p.tutor_phone,p.public_token,
+      (SELECT vaccine_name FROM cps_vaccinations v WHERE v.pet_id=p.id ORDER BY application_date DESC,created_at DESC LIMIT 1) latest_vaccine,
+      (SELECT next_due_date FROM cps_vaccinations v WHERE v.pet_id=p.id AND next_due_date IS NOT NULL ORDER BY next_due_date ASC LIMIT 1) next_due_date
+      FROM cps_pets p ORDER BY p.updated_at DESC,p.created_at DESC LIMIT 500`)
+  ]);
+  res.json({
+    due:due.rows.map(x=>{const msg='Olá, '+x.tutor_name+'! 🐾 Passando para lembrar que a próxima dose de '+x.vaccine_name+' do(a) '+x.pet_name+' está prevista para '+String(x.next_due_date).slice(0,10)+'. Você também pode consultar o cartão de vacina online: '+(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host')+'/cartao/'+x.public_token;return{petName:x.pet_name,species:x.species,tutorName:x.tutor_name,tutorPhone:x.tutor_phone,publicToken:x.public_token,vaccineName:x.vaccine_name,nextDueDate:x.next_due_date,whatsappUrl:'https://wa.me/'+phone(x.tutor_phone)+'?text='+encodeURIComponent(msg)}}),
+    cards:cards.rows.map(x=>({petId:x.id,petName:x.pet_name,species:x.species,tutorName:x.tutor_name,tutorPhone:x.tutor_phone,publicToken:x.public_token,latestVaccine:x.latest_vaccine,nextDueDate:x.next_due_date}))
+  });
+}catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar os cartões de vacina.'})}});
+
+app.post('/api/admin/vaccinations',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({
+  tutorName:z.string().trim().min(2).max(140),tutorPhone:z.string().trim().min(8).max(40),tutorEmail:z.string().trim().email().max(200).optional().or(z.literal('')),
+  petName:z.string().trim().min(1).max(120),species:z.string().trim().min(2).max(100),vaccineName:z.string().trim().min(2).max(160),
+  batch:z.string().trim().max(120).optional().default(''),applicationDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  nextDueDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal('')),notes:z.string().trim().max(1000).optional().default('')
+});try{
+  const p=schema.parse(req.body), client=await pool.connect();
+  let petId,publicToken;
+  try{
+    await client.query('BEGIN');
+    const existing=await client.query('SELECT id,public_token FROM cps_pets WHERE tutor_phone=$1 AND LOWER(pet_name)=LOWER($2) ORDER BY created_at DESC LIMIT 1',[p.tutorPhone,p.petName]);
+    if(existing.rowCount){petId=existing.rows[0].id;publicToken=existing.rows[0].public_token;await client.query('UPDATE cps_pets SET tutor_name=$1,tutor_email=$2,species=$3,updated_at=NOW() WHERE id=$4',[p.tutorName,p.tutorEmail||null,p.species,petId])}
+    else{petId=crypto.randomUUID();publicToken=crypto.randomUUID();await client.query('INSERT INTO cps_pets(id,tutor_name,tutor_phone,tutor_email,pet_name,species,public_token) VALUES($1,$2,$3,$4,$5,$6,$7)',[petId,p.tutorName,p.tutorPhone,p.tutorEmail||null,p.petName,p.species,publicToken])}
+    const vaccinationId=crypto.randomUUID();
+    await client.query('INSERT INTO cps_vaccinations(id,pet_id,vaccine_name,application_date,next_due_date,batch,veterinarian,notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[vaccinationId,petId,p.vaccineName,p.applicationDate,p.nextDueDate||null,p.batch||null,'Isabela',p.notes||null]);
+    await client.query('UPDATE cps_pets SET updated_at=NOW() WHERE id=$1',[petId]);
+    await client.query('COMMIT');
+    await audit(req,'create_vaccination','vaccination',vaccinationId,{petId,vaccine:p.vaccineName});
+    res.status(201).json({ok:true,petId,vaccinationId,publicToken,cardUrl:'/cartao/'+publicToken});
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da vacinação.'});console.error(e);res.status(500).json({error:'Não foi possível registrar a vacinação.'})}});
+
 app.get('/api/admin/finance',needAuth,needDb,async(req,res)=>{const [p,e]=await Promise.all([pool.query('SELECT p.id,p.booking_id,p.amount,p.method,p.paid_at,p.note,p.created_at,b.tutor_name,b.service FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id ORDER BY p.paid_at DESC,p.created_at DESC LIMIT 500'),pool.query('SELECT id,amount,category,occurred_at,note,created_at FROM cps_expenses ORDER BY occurred_at DESC,created_at DESC LIMIT 500')]);res.json({payments:p.rows.map(x=>({...x,amount:Number(x.amount)})),expenses:e.rows.map(x=>({...x,amount:Number(x.amount)}))});});
 
 
@@ -235,6 +275,17 @@ app.get('/calendar/:token.ics',needDb,async(req,res)=>{try{
   res.setHeader('Cache-Control','no-store, max-age=0');
   res.send(lines.join('\r\n'));
 }catch(e){console.error(e);res.status(500).send('Calendar unavailable')}});
+
+
+app.get('/cartao/:token',needDb,async(req,res)=>{try{
+  const pet=await pool.query('SELECT * FROM cps_pets WHERE public_token=$1',[req.params.token]);
+  if(!pet.rowCount)return res.status(404).send('Cartão não encontrado.');
+  const p=pet.rows[0],vacc=await pool.query('SELECT vaccine_name,application_date,next_due_date,batch,veterinarian,notes FROM cps_vaccinations WHERE pet_id=$1 ORDER BY application_date DESC,created_at DESC',[p.id]);
+  const escHtml=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const dateBr=v=>{if(!v)return'—';const s=String(v).slice(0,10).split('-');return s.length===3?s.reverse().join('/'):String(v)};
+  const rows=vacc.rows.map(v=>'<tr><td><strong>'+escHtml(v.vaccine_name)+'</strong></td><td>'+dateBr(v.application_date)+'</td><td>'+dateBr(v.next_due_date)+'</td><td>'+escHtml(v.batch||'—')+'</td></tr>').join('');
+  res.send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#B08A58"><title>Cartão de vacina • ${escHtml(p.pet_name)}</title><link rel="stylesheet" href="/styles.css"></head><body><main class="legal section-shell"><a class="back-link" href="/">← Casal Pet Sitter</a><div class="eyebrow">Cartão de vacina online</div><h1>${escHtml(p.pet_name)}</h1><p><strong>Tutor:</strong> ${escHtml(p.tutor_name)} &nbsp; • &nbsp; <strong>Espécie:</strong> ${escHtml(p.species)}</p><section class="panel-card"><h2>Histórico de vacinação</h2><div class="table-wrap"><table><thead><tr><th>Vacina</th><th>Aplicação</th><th>Próxima dose</th><th>Lote</th></tr></thead><tbody>${rows||'<tr><td colspan="4">Nenhuma vacina registrada.</td></tr>'}</tbody></table></div></section><section class="panel-card"><h2>Como funciona o lembrete?</h2><p class="muted">Mantemos a próxima dose registrada no sistema. Quando a data estiver se aproximando, o Casal Pet Sitter acompanha o vencimento e pode entrar em contato com o tutor para lembrar da vacinação.</p></section><p class="muted">Este cartão é um registro informativo dos atendimentos cadastrados pelo Casal Pet Sitter e não substitui documentos oficiais exigidos por autoridades ou estabelecimentos.</p></main></body></html>`);
+}catch(e){console.error(e);res.status(500).send('Não foi possível abrir o cartão agora.')}});
 
 app.get('/admin',(_req,res)=>res.sendFile(path.join(__dirname,'public','admin.html')));
 app.get('/login',(_req,res)=>res.sendFile(path.join(__dirname,'public','login.html')));
