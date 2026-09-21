@@ -1,0 +1,120 @@
+import 'dotenv/config';
+import crypto from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import express from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
+import bcrypt from 'bcryptjs';
+import pg from 'pg';
+import { z } from 'zod';
+import { google } from 'googleapis';
+
+const { Pool } = pg;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = Number(process.env.PORT || 3000);
+const PROD = process.env.NODE_ENV === 'production';
+const DB = process.env.DATABASE_URL || '';
+const pool = new Pool({ connectionString: DB || undefined, ssl: DB && !DB.includes('localhost') ? { rejectUnauthorized: false } : undefined, max: 10 });
+
+app.set('trust proxy', 1);
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc:["'self'"], scriptSrc:["'self'"], styleSrc:["'self'"], imgSrc:["'self'",'data:'], connectSrc:["'self'"], objectSrc:["'none'"], frameAncestors:["'none'"] } } }));
+app.use(express.json({ limit: '80kb' }));
+app.use(express.urlencoded({ extended: false, limit: '80kb' }));
+const PgStore = connectPgSimple(session);
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+app.use(session({ store: DB ? new PgStore({ pool, tableName:'cps_session', createTableIfMissing:true }) : undefined, secret:SESSION_SECRET, resave:false, saveUninitialized:false, name:'cps.sid', cookie:{ httpOnly:true, secure:PROD, sameSite:'lax', maxAge:12*60*60*1000 } }));
+app.use(express.static(path.join(__dirname,'public'), { maxAge: PROD ? '1h' : 0 }));
+
+const WIFE_WHATSAPP = process.env.WIFE_WHATSAPP || '5531996377552';
+const OWNER_EMAIL = process.env.OWNER_EMAIL || 'luanmagalhaes2464@gmail.com';
+const WIFE_EMAIL = process.env.WIFE_EMAIL || 'belaisapr@gmail.com';
+const SERVICE = { pet_sitter:'Pet sitter', pet_sitter_passeio:'Pet sitter + passeio', passeio:'Passeio', hospedagem:'Hospedagem', vacinacao:'Vacinação' };
+const STATUS = { new:'Nova', analyzing:'Em análise', confirmed:'Confirmada', completed:'Concluída', cancelled:'Cancelada' };
+const STATUS_KEYS = Object.keys(STATUS);
+const money = n => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(n||0));
+const phone = v => String(v||'').replace(/\D/g,'');
+const text = (v,n=500) => String(v||'').trim().slice(0,n);
+const d = v => new Date(String(v)+'T12:00:00-03:00');
+const daysInclusive = (a,b) => Math.max(0,Math.floor((d(b)-d(a))/86400000)+1);
+const stayDays = (a,b) => Math.max(1,Math.ceil((d(b)-d(a))/86400000));
+
+function calc(service,start,end,visits){
+  const n = Math.max(1,Math.min(10,Number(visits||1)));
+  const days = daysInclusive(start,end);
+  if (!days) throw new Error('Período inválido.');
+  if (service==='pet_sitter') return { total:days*n*35, detail:days+' dia(s) × '+n+' visita(s)/dia × R$ 35' };
+  if (service==='pet_sitter_passeio') return { total:days*n*50, detail:days+' dia(s) × '+n+' visita(s)/dia × (R$ 35 + R$ 15)' };
+  if (service==='passeio') return { total:days*50, detail:days+' passeio(s) de 30 min × R$ 50' };
+  if (service==='hospedagem') { const q=stayDays(start,end), rate=q>5?65:70; return { total:q*rate, detail:q+' diária(s) × '+money(rate) }; }
+  if (service==='vacinacao') return { total:null, detail:'Valor definido após avaliação do protocolo e da vacina indicada.' };
+  throw new Error('Serviço inválido.');
+}
+
+async function initDb(){
+  if(!DB) return;
+  await pool.query('CREATE TABLE IF NOT EXISTS cps_users(id BIGSERIAL PRIMARY KEY,name VARCHAR(120) NOT NULL,email VARCHAR(200) UNIQUE NOT NULL,password_hash TEXT NOT NULL,role VARCHAR(30) NOT NULL DEFAULT \'admin\',active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
+  await pool.query('CREATE TABLE IF NOT EXISTS cps_bookings(id UUID PRIMARY KEY,service VARCHAR(60) NOT NULL,start_date DATE NOT NULL,end_date DATE NOT NULL,visits INTEGER NOT NULL DEFAULT 1,tutor_name VARCHAR(140) NOT NULL,phone VARCHAR(40) NOT NULL,street VARCHAR(220) NOT NULL,neighborhood VARCHAR(140) NOT NULL,animal_count INTEGER NOT NULL DEFAULT 1,animals VARCHAR(300) NOT NULL,notes TEXT,estimated_total NUMERIC(12,2),price_detail VARCHAR(300),status VARCHAR(30) NOT NULL DEFAULT \'new\',calendar_event_id VARCHAR(255),whatsapp_sent BOOLEAN NOT NULL DEFAULT FALSE,source VARCHAR(40) NOT NULL DEFAULT \'site\',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
+  await pool.query('CREATE INDEX IF NOT EXISTS cps_bookings_dates_idx ON cps_bookings(start_date,end_date); CREATE INDEX IF NOT EXISTS cps_bookings_status_idx ON cps_bookings(status); CREATE INDEX IF NOT EXISTS cps_bookings_phone_idx ON cps_bookings(phone)');
+  await pool.query('CREATE TABLE IF NOT EXISTS cps_payments(id UUID PRIMARY KEY,booking_id UUID REFERENCES cps_bookings(id) ON DELETE SET NULL,amount NUMERIC(12,2) NOT NULL CHECK(amount>=0),method VARCHAR(40) NOT NULL DEFAULT \'pix\',paid_at DATE NOT NULL DEFAULT CURRENT_DATE,note VARCHAR(300),created_by BIGINT REFERENCES cps_users(id) ON DELETE SET NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
+  await pool.query('CREATE TABLE IF NOT EXISTS cps_expenses(id UUID PRIMARY KEY,amount NUMERIC(12,2) NOT NULL CHECK(amount>=0),category VARCHAR(100) NOT NULL,occurred_at DATE NOT NULL DEFAULT CURRENT_DATE,note VARCHAR(300),created_by BIGINT REFERENCES cps_users(id) ON DELETE SET NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
+  await pool.query('CREATE TABLE IF NOT EXISTS cps_audit_log(id BIGSERIAL PRIMARY KEY,user_id BIGINT REFERENCES cps_users(id) ON DELETE SET NULL,action VARCHAR(100) NOT NULL,entity_type VARCHAR(60),entity_id VARCHAR(100),metadata JSONB,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
+  await seed(process.env.ADMIN_EMAIL,process.env.ADMIN_PASSWORD,process.env.ADMIN_NAME||'Luan');
+  await seed(process.env.SECOND_ADMIN_EMAIL,process.env.SECOND_ADMIN_PASSWORD,process.env.SECOND_ADMIN_NAME||'Isabela');
+}
+async function seed(email,password,name){ if(!email||!password)return; const e=email.trim().toLowerCase(); const found=await pool.query('SELECT id FROM cps_users WHERE email=$1',[e]); if(found.rowCount)return; const hash=await bcrypt.hash(password,12); await pool.query('INSERT INTO cps_users(name,email,password_hash,role) VALUES($1,$2,$3,\'admin\')',[name,e,hash]); }
+
+function bookingMsg(b){
+  return ['🐾 Nova pré-solicitação — Casal Pet Sitter','Código: '+b.id,'Serviço: '+SERVICE[b.service],'Período: '+b.startDate+' a '+b.endDate,['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,'Tutor: '+b.tutorName,'Telefone: '+b.phone,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Cálculo: '+b.priceDetail,'Status: aguardando confirmação de disponibilidade.'].filter(Boolean).join('\n');
+}
+async function sendWhatsApp(to,body){
+  const token=process.env.WHATSAPP_TOKEN, id=process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if(!token||!id) return false;
+  const r=await fetch('https://graph.facebook.com/v22.0/'+id+'/messages',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone(to),type:'text',text:{body,preview_url:false}})});
+  if(!r.ok) throw new Error('WhatsApp API '+r.status); return true;
+}
+async function createCalendar(b){
+  const client=process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, key=(process.env.GOOGLE_PRIVATE_KEY||'').replace(/\\n/g,'\n'), calendarId=process.env.GOOGLE_CALENDAR_ID;
+  if(!client||!key||!calendarId) return null;
+  const auth=new google.auth.JWT({email:client,key,scopes:['https://www.googleapis.com/auth/calendar']});
+  const api=google.calendar({version:'v3',auth});
+  const start=new Date(b.startDate+'T09:00:00-03:00'), end=new Date(b.endDate+'T18:00:00-03:00'); if(end<=start)end.setHours(start.getHours()+1);
+  const r=await api.events.insert({calendarId,sendUpdates:'all',requestBody:{summary:'Pré-solicitação • '+SERVICE[b.service]+' • '+b.tutorName,location:b.street+', '+b.neighborhood+', Viçosa - MG',description:bookingMsg(b),start:{dateTime:start.toISOString(),timeZone:'America/Sao_Paulo'},end:{dateTime:end.toISOString(),timeZone:'America/Sao_Paulo'},attendees:[{email:OWNER_EMAIL},{email:WIFE_EMAIL}]}});
+  return r.data.id||null;
+}
+
+const bookingSchema=z.object({service:z.enum(['pet_sitter','pet_sitter_passeio','passeio','hospedagem','vacinacao']),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10).default(1),tutorName:z.string().trim().min(2).max(140),phone:z.string().trim().min(8).max(40),street:z.string().trim().min(3).max(220),neighborhood:z.string().trim().min(2).max(140),animalCount:z.coerce.number().int().min(1).max(30),animals:z.string().trim().min(2).max(300),notes:z.string().trim().max(1200).optional().default('')});
+const bookingLimiter=rateLimit({windowMs:10*60*1000,limit:20,standardHeaders:true,legacyHeaders:false});
+const loginLimiter=rateLimit({windowMs:15*60*1000,limit:10,standardHeaders:true,legacyHeaders:false,skipSuccessfulRequests:true});
+function needDb(req,res,next){ if(!DB)return res.status(503).json({error:'Banco de dados não configurado.'}); next(); }
+function needAuth(req,res,next){ if(!req.session.userId)return res.status(401).json({error:'Não autenticado.'}); next(); }
+function csrf(req){ if(!req.session.csrfToken)req.session.csrfToken=crypto.randomBytes(24).toString('hex'); return req.session.csrfToken; }
+function needCsrf(req,res,next){ if(!req.get('x-csrf-token')||req.get('x-csrf-token')!==req.session.csrfToken)return res.status(403).json({error:'Sessão expirada. Atualize a página.'}); next(); }
+async function audit(req,action,type,id,metadata={}){ if(!DB)return; try{await pool.query('INSERT INTO cps_audit_log(user_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,$4,$5)',[req.session.userId||null,action,type,id?String(id):null,metadata]);}catch(e){console.error('audit',e.message);} }
+function mapBooking(r){ return {id:r.id,service:r.service,serviceLabel:SERVICE[r.service]||r.service,startDate:r.start_date,endDate:r.end_date,visits:r.visits,tutorName:r.tutor_name,phone:r.phone,street:r.street,neighborhood:r.neighborhood,animalCount:r.animal_count,animals:r.animals,notes:r.notes,estimatedTotal:r.estimated_total==null?null:Number(r.estimated_total),priceDetail:r.price_detail,status:r.status,statusLabel:STATUS[r.status]||r.status,whatsappSent:r.whatsapp_sent,createdAt:r.created_at}; }
+
+app.get('/api/health',async(_req,res)=>{let db=false;if(DB){try{await pool.query('SELECT 1');db=true}catch{}}res.json({ok:true,db,version:'2.1.0'})});
+app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{const p=bookingSchema.parse(req.body);const today=new Date();today.setHours(0,0,0,0);if(d(p.startDate)<today||d(p.endDate)<d(p.startDate))return res.status(400).json({error:'Confira as datas informadas.'});const price=calc(p.service,p.startDate,p.endDate,p.visits),id=crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);let whatsappSent=false,calendarEventId=null;try{whatsappSent=await sendWhatsApp(WIFE_WHATSAPP,bookingMsg(b))}catch(e){console.error(e.message)}try{calendarEventId=await createCalendar(b)}catch(e){console.error(e.message)}await pool.query('UPDATE cps_bookings SET whatsapp_sent=$1,calendar_event_id=$2,updated_at=NOW() WHERE id=$3',[whatsappSent,calendarEventId,id]);res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,whatsappSent,calendarCreated:Boolean(calendarEventId),whatsappFallbackUrl:'https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(bookingMsg(b))});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados informados.'});console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});}});
+
+app.post('/api/auth/login',loginLimiter,needDb,async(req,res)=>{const email=text(req.body.email,200).toLowerCase(),password=String(req.body.password||'').slice(0,300);if(!email||!password)return res.status(400).json({error:'Informe e-mail e senha.'});const q=await pool.query('SELECT id,name,email,password_hash,role,active FROM cps_users WHERE email=$1',[email]),u=q.rows[0];if(!u||!u.active||!(await bcrypt.compare(password,u.password_hash)))return res.status(401).json({error:'E-mail ou senha inválidos.'});req.session.regenerate(err=>{if(err)return res.status(500).json({error:'Falha ao iniciar sessão.'});req.session.userId=u.id;req.session.csrfToken=crypto.randomBytes(24).toString('hex');res.json({ok:true,user:{id:u.id,name:u.name,email:u.email,role:u.role},csrfToken:req.session.csrfToken});});});
+app.get('/api/auth/me',needAuth,needDb,async(req,res)=>{const q=await pool.query('SELECT id,name,email,role FROM cps_users WHERE id=$1 AND active=TRUE',[req.session.userId]);if(!q.rowCount)return req.session.destroy(()=>res.status(401).json({error:'Sessão inválida.'}));res.json({user:q.rows[0],csrfToken:csrf(req)});});
+app.post('/api/auth/logout',needAuth,needCsrf,(req,res)=>req.session.destroy(()=>{res.clearCookie('cps.sid');res.json({ok:true})}));
+app.post('/api/auth/change-password',needAuth,needCsrf,needDb,async(req,res)=>{const current=String(req.body.currentPassword||''),next=String(req.body.newPassword||'');if(next.length<10)return res.status(400).json({error:'A nova senha deve ter pelo menos 10 caracteres.'});const q=await pool.query('SELECT password_hash FROM cps_users WHERE id=$1',[req.session.userId]);if(!q.rowCount||!(await bcrypt.compare(current,q.rows[0].password_hash)))return res.status(400).json({error:'Senha atual incorreta.'});await pool.query('UPDATE cps_users SET password_hash=$1,updated_at=NOW() WHERE id=$2',[await bcrypt.hash(next,12),req.session.userId]);await audit(req,'change_password','user',req.session.userId);res.json({ok:true});});
+
+app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{const [s,m,r]=await Promise.all([pool.query("SELECT COALESCE((SELECT SUM(amount) FROM cps_payments),0) received,COALESCE((SELECT SUM(amount) FROM cps_expenses),0) expenses,COALESCE((SELECT SUM(estimated_total) FROM cps_bookings WHERE status IN ('confirmed','completed')),0) contracted,(SELECT COUNT(*) FROM cps_bookings) bookings,(SELECT COUNT(DISTINCT phone) FROM cps_bookings) clients"),pool.query("SELECT TO_CHAR(month,'YYYY-MM') month,COALESCE(p.received,0) received,COALESCE(e.expenses,0) expenses FROM generate_series(date_trunc('month',CURRENT_DATE)-interval '5 months',date_trunc('month',CURRENT_DATE),interval '1 month') month LEFT JOIN (SELECT date_trunc('month',paid_at) m,SUM(amount) received FROM cps_payments GROUP BY 1)p ON p.m=month LEFT JOIN (SELECT date_trunc('month',occurred_at) m,SUM(amount) expenses FROM cps_expenses GROUP BY 1)e ON e.m=month ORDER BY month"),pool.query('SELECT * FROM cps_bookings ORDER BY created_at DESC LIMIT 8')]);const x=s.rows[0];res.json({summary:{received:Number(x.received),expenses:Number(x.expenses),net:Number(x.received)-Number(x.expenses),contracted:Number(x.contracted),bookings:Number(x.bookings),clients:Number(x.clients)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),expenses:Number(v.expenses)})),recent:r.rows.map(mapBooking)});});
+app.get('/api/admin/bookings',needAuth,needDb,async(req,res)=>{const st=text(req.query.status,30),search=text(req.query.search,100),params=[],where=[];if(st&&STATUS_KEYS.includes(st)){params.push(st);where.push('status=$'+params.length)}if(search){params.push('%'+search+'%');where.push('(tutor_name ILIKE $'+params.length+' OR phone ILIKE $'+params.length+' OR animals ILIKE $'+params.length+')')}const q=await pool.query('SELECT * FROM cps_bookings '+(where.length?'WHERE '+where.join(' AND '):'')+' ORDER BY start_date DESC,created_at DESC LIMIT 500',params);res.json({bookings:q.rows.map(mapBooking)});});
+app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{const st=text(req.body.status,30);if(!STATUS_KEYS.includes(st))return res.status(400).json({error:'Status inválido.'});const q=await pool.query('UPDATE cps_bookings SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[st,req.params.id]);if(!q.rowCount)return res.status(404).json({error:'Agendamento não encontrado.'});await audit(req,'update_booking_status','booking',req.params.id,{status:st});res.json({booking:mapBooking(q.rows[0])});});
+app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
+app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
+app.get('/api/admin/finance',needAuth,needDb,async(req,res)=>{const [p,e]=await Promise.all([pool.query('SELECT p.id,p.booking_id,p.amount,p.method,p.paid_at,p.note,p.created_at,b.tutor_name,b.service FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id ORDER BY p.paid_at DESC,p.created_at DESC LIMIT 500'),pool.query('SELECT id,amount,category,occurred_at,note,created_at FROM cps_expenses ORDER BY occurred_at DESC,created_at DESC LIMIT 500')]);res.json({payments:p.rows.map(x=>({...x,amount:Number(x.amount)})),expenses:e.rows.map(x=>({...x,amount:Number(x.amount)}))});});
+
+app.get('/admin',(_req,res)=>res.sendFile(path.join(__dirname,'public','admin.html')));
+app.get('/login',(_req,res)=>res.sendFile(path.join(__dirname,'public','login.html')));
+app.get('/privacidade',(_req,res)=>res.sendFile(path.join(__dirname,'public','privacy.html')));
+app.use((req,res,next)=>{if(req.path.startsWith('/api/'))return next();res.sendFile(path.join(__dirname,'public','index.html'))});
+app.use((err,_req,res,_next)=>{console.error(err);res.status(500).json({error:'Erro interno.'})});
+
+initDb().then(()=>app.listen(PORT,()=>console.log('Casal Pet Sitter online na porta '+PORT))).catch(err=>{console.error('Falha ao inicializar banco',err);app.listen(PORT,()=>console.log('Casal Pet Sitter em modo degradado na porta '+PORT))});
