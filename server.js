@@ -14,6 +14,7 @@ import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 
 const { Pool } = pg;
+pg.types.setTypeParser(1082, value => value);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -85,7 +86,7 @@ async function sendBookingEmail(b){
   if(!host||!user||!pass) return false;
   const port=Number(process.env.SMTP_PORT||465);
   const secure=String(process.env.SMTP_SECURE??'true').toLowerCase()==='true';
-  const transporter=nodemailer.createTransport({host,port,secure,auth:{user,pass}});
+  const transporter=nodemailer.createTransport({host,port,secure,connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,auth:{user,pass}});
   const subject='🐾 Nova pré-reserva • '+SERVICE[b.service]+' • '+b.tutorName+' • '+dateBr(b.startDate);
   const tutorUrl='https://wa.me/'+waPhone(b.phone);
   const panelUrl=process.env.APP_BASE_URL||'https://casal-pet-sitter.onrender.com';
@@ -137,12 +138,13 @@ app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{
   const p=bookingSchema.parse(req.body);
   const today=new Date();today.setHours(0,0,0,0);
   if(d(p.startDate)<today||d(p.endDate)<d(p.startDate))return res.status(400).json({error:'Confira as datas informadas.'});
-  const price=calc(p.service,p.startDate,p.endDate,p.visits),id=crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};
-  await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);
-  let emailSent=false;
-  try{emailSent=await sendBookingEmail(b)}catch(e){console.error('Email:',e.message)}
-  await pool.query('UPDATE cps_bookings SET email_sent=$1,updated_at=NOW() WHERE id=$2',[emailSent,id]);
-  const customerWhatsAppUrl='https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(b));res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,emailSent,customerWhatsAppUrl});
+  const requestId=z.string().uuid().optional().parse(req.body.requestId);
+  if(requestId){const existing=await pool.query('SELECT * FROM cps_bookings WHERE id=$1',[requestId]);if(existing.rowCount){const saved=mapBooking(existing.rows[0]);if(saved.phone!==p.phone||saved.tutorName!==p.tutorName||saved.service!==p.service||saved.startDate!==p.startDate||saved.endDate!==p.endDate)return res.status(409).json({error:'A solicitação anterior já foi registrada. Atualize a página para enviar outra.'});return res.json({ok:true,id:saved.id,total:saved.estimatedTotal,priceDetail:saved.priceDetail,customerWhatsAppUrl:'https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(saved))})}}
+  const price=calc(p.service,p.startDate,p.endDate,p.visits),id=requestId||crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};
+  await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO NOTHING',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);
+  const customerWhatsAppUrl='https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(b));
+  res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,customerWhatsAppUrl});
+  sendBookingEmail(b).then(sent=>pool.query('UPDATE cps_bookings SET email_sent=$1 WHERE id=$2',[sent,id])).catch(e=>console.error('Email:',e.message));
 }catch(e){
   if(e instanceof z.ZodError){const field=e.issues?.[0]?.path?.[0];const messages={service:'Selecione o serviço.',startDate:'Informe a data inicial.',endDate:'Informe a data final.',visits:'Confira a quantidade de visitas por dia.',tutorName:'Informe o nome completo do tutor.',phone:'Informe um telefone/WhatsApp válido.',street:'Informe a rua e o número.',neighborhood:'Informe o bairro.',animalCount:'Informe a quantidade de animais.',animals:'Informe quais são os animais, por exemplo: "1 cão", "2 gatos" ou "Thor (cão)".',notes:'Confira as observações.'};return res.status(400).json({error:messages[field]||'Confira os dados informados.',field});}
   console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});
@@ -184,20 +186,20 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
       COALESCE((SELECT SUM(e.amount) FROM cps_expenses e
         WHERE ($1::date IS NULL OR e.occurred_at >= $1::date) AND ($2::date IS NULL OR e.occurred_at <= $2::date)),0) expenses,
       COALESCE((SELECT SUM(b.estimated_total) FROM cps_bookings b
-        WHERE b.status IN ('confirmed','completed') AND ($1::date IS NULL OR b.start_date >= $1::date)
+        WHERE b.status IN ('confirmed','completed') AND ($1::date IS NULL OR b.end_date >= $1::date)
         AND ($2::date IS NULL OR b.start_date <= $2::date) AND ($3::text IS NULL OR b.service=$3::text)),0) contracted,
       (SELECT COUNT(*) FROM cps_bookings b
-        WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+        WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
         AND ($3::text IS NULL OR b.service=$3::text)) bookings,
       (SELECT COUNT(DISTINCT b.phone) FROM cps_bookings b
-        WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+        WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
         AND ($3::text IS NULL OR b.service=$3::text)) clients`;
   const monthSql=`
     WITH bounds AS (
-      SELECT COALESCE($1::date,date_trunc('month',CURRENT_DATE)-interval '5 months')::date f,
-             COALESCE($2::date,CURRENT_DATE)::date t
+      SELECT COALESCE($1::date,(SELECT MIN(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses) dates),CURRENT_DATE)::date f,
+             COALESCE($2::date,(SELECT MAX(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses) dates),CURRENT_DATE)::date t
     ), months AS (
-      SELECT generate_series(date_trunc('month',f),date_trunc('month',t),interval '1 month') month FROM bounds
+      SELECT generate_series(date_trunc('month',f),date_trunc('month',t),interval '1 month') AS month_start FROM bounds
     ), pay AS (
       SELECT date_trunc('month',p.paid_at) m,SUM(p.amount) received
       FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id,bounds
@@ -207,11 +209,11 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
       SELECT date_trunc('month',e.occurred_at) m,SUM(e.amount) expenses
       FROM cps_expenses e,bounds WHERE e.occurred_at BETWEEN bounds.f AND bounds.t GROUP BY 1
     )
-    SELECT TO_CHAR(month,'YYYY-MM') month,COALESCE(pay.received,0) received,COALESCE(exp.expenses,0) expenses
-    FROM months LEFT JOIN pay ON pay.m=month LEFT JOIN exp ON exp.m=month ORDER BY month`;
+    SELECT TO_CHAR(month_start,'YYYY-MM') AS month,COALESCE(pay.received,0) received,COALESCE(exp.expenses,0) expenses
+    FROM months LEFT JOIN pay ON pay.m=month_start LEFT JOIN exp ON exp.m=month_start ORDER BY month_start`;
   const bookingCountSql=`
     SELECT service,COUNT(*) bookings FROM cps_bookings b
-    WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+    WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
       AND ($3::text IS NULL OR b.service=$3::text)
     GROUP BY service`;
   const revenueSql=`
@@ -222,9 +224,9 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
     GROUP BY COALESCE(b.service,'unlinked')`;
   const recentSql=`
     SELECT * FROM cps_bookings b
-    WHERE ($1::date IS NULL OR b.start_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
+    WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
       AND ($3::text IS NULL OR b.service=$3::text)
-    ORDER BY created_at DESC LIMIT 12`;
+    ORDER BY start_date DESC,created_at DESC`;
   const [s,m,bc,rv,r]=await Promise.all([
     pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args)
   ]);
@@ -235,7 +237,27 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
   res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),net:Number(x.received)-Number(x.expenses),contracted:Number(x.contracted),bookings:Number(x.bookings),clients:Number(x.clients)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
 app.get('/api/admin/bookings',needAuth,needDb,async(req,res)=>{const st=text(req.query.status,30),search=text(req.query.search,100),params=[],where=[];if(st&&STATUS_KEYS.includes(st)){params.push(st);where.push('status=$'+params.length)}if(search){params.push('%'+search+'%');where.push('(tutor_name ILIKE $'+params.length+' OR phone ILIKE $'+params.length+' OR animals ILIKE $'+params.length+')')}const q=await pool.query('SELECT * FROM cps_bookings '+(where.length?'WHERE '+where.join(' AND '):'')+' ORDER BY start_date DESC,created_at DESC LIMIT 500',params);res.json({bookings:q.rows.map(mapBooking)});});
-app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{const st=text(req.body.status,30);if(!STATUS_KEYS.includes(st))return res.status(400).json({error:'Status inválido.'});const q=await pool.query('UPDATE cps_bookings SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[st,req.params.id]);if(!q.rowCount)return res.status(404).json({error:'Agendamento não encontrado.'});let row=q.rows[0];if(st==='confirmed'&&!row.calendar_event_id){try{const b=mapBooking(row),calendarEventId=await createCalendar({id:b.id,service:b.service,startDate:String(b.startDate).slice(0,10),endDate:String(b.endDate).slice(0,10),visits:b.visits,tutorName:b.tutorName,phone:b.phone,street:b.street,neighborhood:b.neighborhood,animalCount:b.animalCount,animals:b.animals,notes:b.notes,estimatedTotal:b.estimatedTotal,priceDetail:b.priceDetail});if(calendarEventId){const uq=await pool.query('UPDATE cps_bookings SET calendar_event_id=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[calendarEventId,req.params.id]);row=uq.rows[0]}}catch(e){console.error('Calendar confirmation:',e.message)}}await audit(req,'update_booking_status','booking',req.params.id,{status:st});res.json({booking:mapBooking(row)});});
+app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{
+  const st=text(req.body.status,30);
+  if(!STATUS_KEYS.includes(st)||!z.string().uuid().safeParse(req.params.id).success)return res.status(400).json({error:'Atendimento ou status inválido.'});
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const found=await client.query('SELECT * FROM cps_bookings WHERE id=$1 FOR UPDATE',[req.params.id]);
+    if(!found.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Atendimento não encontrado.'})}
+    let paymentCreated=false;
+    if(st==='completed'&&found.rows[0].status!=='completed'&&found.rows[0].estimated_total!=null){
+      const paid=await client.query('SELECT COALESCE(SUM(amount),0) total FROM cps_payments WHERE booking_id=$1',[req.params.id]);
+      const balance=Math.max(0,Number(found.rows[0].estimated_total)-Number(paid.rows[0].total));
+      if(balance>0){await client.query("INSERT INTO cps_payments(id,booking_id,amount,method,note,created_by) VALUES($1,$2,$3,'outro','Recebimento registrado ao concluir o atendimento',$4)",[crypto.randomUUID(),req.params.id,balance,req.session.userId]);paymentCreated=true}
+    }
+    const q=await client.query('UPDATE cps_bookings SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[st,req.params.id]);
+    await client.query('COMMIT');
+    let row=q.rows[0];if(st==='confirmed'&&!row.calendar_event_id){try{const b=mapBooking(row),calendarEventId=await createCalendar({id:b.id,service:b.service,startDate:String(b.startDate).slice(0,10),endDate:String(b.endDate).slice(0,10),visits:b.visits,tutorName:b.tutorName,phone:b.phone,street:b.street,neighborhood:b.neighborhood,animalCount:b.animalCount,animals:b.animals,notes:b.notes,estimatedTotal:b.estimatedTotal,priceDetail:b.priceDetail});if(calendarEventId){const uq=await pool.query('UPDATE cps_bookings SET calendar_event_id=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[calendarEventId,req.params.id]);row=uq.rows[0]}}catch(e){console.error('Calendar confirmation:',e.message)}}
+    await audit(req,'update_booking_status','booking',req.params.id,{status:st,paymentCreated});
+    res.json({booking:mapBooking(row),paymentCreated});
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+});
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
 app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host');res.json({database:true,emailAutomatic:Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS),googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
@@ -341,6 +363,6 @@ app.get('/login',(_req,res)=>res.sendFile(path.join(__dirname,'public','login.ht
 app.get('/setup',(_req,res)=>res.sendFile(path.join(__dirname,'public','setup.html')));
 app.get('/privacidade',(_req,res)=>res.sendFile(path.join(__dirname,'public','privacy.html')));
 app.use((req,res,next)=>{if(req.path.startsWith('/api/'))return next();res.sendFile(path.join(__dirname,'public','index.html'))});
-app.use((err,_req,res,_next)=>{console.error(err);res.status(500).json({error:'Erro interno.'})});
+app.use((err,_req,res,_next)=>{console.error(err);res.status(err.status===400?400:500).json({error:err.status===400?'Confira os dados enviados.':'Não foi possível concluir agora. Tente novamente em alguns instantes.'})});
 
 initDb().then(()=>app.listen(PORT,()=>console.log('Casal Pet Sitter online na porta '+PORT))).catch(err=>{console.error('Falha ao inicializar banco',err);app.listen(PORT,()=>console.log('Casal Pet Sitter em modo degradado na porta '+PORT))});
