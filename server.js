@@ -11,7 +11,6 @@ import bcrypt from 'bcryptjs';
 import pg from 'pg';
 import { z } from 'zod';
 import { google } from 'googleapis';
-import nodemailer from 'nodemailer';
 
 const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,42 +76,6 @@ function bookingMsg(b){
   return ['🐾 Nova pré-solicitação — Casal Pet Sitter','Código: '+b.id,'Serviço: '+SERVICE[b.service],'Período: '+dateBr(b.startDate)+' a '+dateBr(b.endDate),['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,'Tutor: '+b.tutorName,'Telefone: '+b.phone,'Falar com o tutor: '+tutorChat,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Cálculo: '+b.priceDetail,'Status: aguardando confirmação de disponibilidade.'].filter(Boolean).join('\n');
 }
 
-function buildBookingIcs(b){
-  const start=String(b.startDate).replace(/-/g,''), endDate=new Date(b.endDate+'T12:00:00Z'); endDate.setUTCDate(endDate.getUTCDate()+1);
-  const end=endDate.toISOString().slice(0,10).replace(/-/g,'');
-  const esc=v=>String(v||'').replace(/\\/g,'\\\\').replace(/\r?\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;');
-  return [
-    'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Casal Pet Sitter//Pre Reserva//PT-BR','CALSCALE:GREGORIAN','METHOD:REQUEST',
-    'BEGIN:VEVENT','UID:'+b.id+'@casal-pet-sitter','DTSTAMP:'+new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z$/,'Z'),
-    'DTSTART;VALUE=DATE:'+start,'DTEND;VALUE=DATE:'+end,
-    'SUMMARY:'+esc('Pré-reserva • '+SERVICE[b.service]+' • '+b.tutorName),
-    'LOCATION:'+esc(b.street+', '+b.neighborhood+', Viçosa - MG'),
-    'DESCRIPTION:'+esc(bookingMsg(b)),
-    'ORGANIZER;CN=Casal Pet Sitter:MAILTO:'+OWNER_EMAIL,
-    'ATTENDEE;CN=Luan;RSVP=TRUE:MAILTO:'+OWNER_EMAIL,
-    'ATTENDEE;CN=Isabela;RSVP=TRUE:MAILTO:'+WIFE_EMAIL,
-    'BEGIN:VALARM','TRIGGER:-P1D','ACTION:DISPLAY','DESCRIPTION:Lembrete Casal Pet Sitter','END:VALARM',
-    'END:VEVENT','END:VCALENDAR'
-  ].join('\r\n');
-}
-async function sendBookingEmail(b){
-  const host=process.env.SMTP_HOST, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS;
-  if(!host||!user||!pass) return false;
-  const port=Number(process.env.SMTP_PORT||465), secure=String(process.env.SMTP_SECURE??'true').toLowerCase()==='true';
-  const transporter=nodemailer.createTransport({host,port,secure,auth:{user,pass}});
-  const subject='🐾 Pré-reserva: '+SERVICE[b.service]+' • '+b.tutorName+' • '+dateBr(b.startDate);
-  const tutorUrl='https://wa.me/'+waPhone(b.phone);
-  const plain=bookingMsg(b)+'\n\nA pré-reserva também vai anexada como evento de calendário.';
-  const html=`<div style="font-family:Arial,sans-serif;color:#3c3026;line-height:1.55"><h2>🐾 Nova pré-reserva — Casal Pet Sitter</h2><p><strong>Serviço:</strong> ${SERVICE[b.service]}</p><p><strong>Período:</strong> ${dateBr(b.startDate)} a ${dateBr(b.endDate)}</p><p><strong>Tutor:</strong> ${b.tutorName}<br><strong>Telefone:</strong> ${b.phone}<br><a href="${tutorUrl}">Abrir conversa com o tutor no WhatsApp</a></p><p><strong>Endereço:</strong> ${b.street} — ${b.neighborhood}, Viçosa/MG</p><p><strong>Animais:</strong> ${b.animalCount} (${b.animals})</p><p><strong>Observações:</strong> ${b.notes||'Não informado'}</p><p><strong>Estimativa:</strong> ${b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)}</p><p><strong>Status:</strong> aguardando confirmação de disponibilidade.</p><hr><p>O evento do trabalho segue anexado para adicionar/aceitar no calendário.</p></div>`;
-  await transporter.sendMail({
-    from:process.env.EMAIL_FROM||('Casal Pet Sitter <'+user+'>'),
-    to:[OWNER_EMAIL,WIFE_EMAIL].join(','),
-    subject,text:plain,html,
-    icalEvent:{method:'REQUEST',filename:'pre-reserva-'+b.id.slice(0,8)+'.ics',content:buildBookingIcs(b)}
-  });
-  return true;
-}
-
 async function sendWhatsApp(to,body){
   const token=process.env.WHATSAPP_TOKEN, id=process.env.WHATSAPP_PHONE_NUMBER_ID;
   if(!token||!id) return false;
@@ -140,7 +103,7 @@ async function audit(req,action,type,id,metadata={}){ if(!DB)return; try{await p
 function mapBooking(r){ return {id:r.id,service:r.service,serviceLabel:SERVICE[r.service]||r.service,startDate:r.start_date,endDate:r.end_date,visits:r.visits,tutorName:r.tutor_name,phone:r.phone,street:r.street,neighborhood:r.neighborhood,animalCount:r.animal_count,animals:r.animals,notes:r.notes,estimatedTotal:r.estimated_total==null?null:Number(r.estimated_total),priceDetail:r.price_detail,status:r.status,statusLabel:STATUS[r.status]||r.status,whatsappSent:r.whatsapp_sent,createdAt:r.created_at}; }
 
 app.get('/api/health',async(_req,res)=>{let db=false;if(DB){try{await pool.query('SELECT 1');db=true}catch{}}res.json({ok:true,db,version:'2.1.0'})});
-app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{const p=bookingSchema.parse(req.body);const today=new Date();today.setHours(0,0,0,0);if(d(p.startDate)<today||d(p.endDate)<d(p.startDate))return res.status(400).json({error:'Confira as datas informadas.'});const price=calc(p.service,p.startDate,p.endDate,p.visits),id=crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);let whatsappSent=false,emailSent=false,calendarEventId=null;try{const [ownerSent,wifeSent]=await Promise.all([sendWhatsApp(OWNER_WHATSAPP,bookingMsg(b)),sendWhatsApp(WIFE_WHATSAPP,bookingMsg(b))]);whatsappSent=ownerSent&&wifeSent}catch(e){console.error('WhatsApp:',e.message)}try{emailSent=await sendBookingEmail(b)}catch(e){console.error('Email:',e.message)}try{calendarEventId=await createCalendar(b)}catch(e){console.error('Calendar:',e.message)}await pool.query('UPDATE cps_bookings SET whatsapp_sent=$1,email_sent=$2,calendar_event_id=$3,updated_at=NOW() WHERE id=$4',[whatsappSent,emailSent,calendarEventId,id]);res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,whatsappSent,emailSent,calendarCreated:Boolean(calendarEventId),contactUrl:'https://wa.me/'+WIFE_WHATSAPP});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados informados.'});console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});}});
+app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{const p=bookingSchema.parse(req.body);const today=new Date();today.setHours(0,0,0,0);if(d(p.startDate)<today||d(p.endDate)<d(p.startDate))return res.status(400).json({error:'Confira as datas informadas.'});const price=calc(p.service,p.startDate,p.endDate,p.visits),id=crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);let whatsappSent=false,calendarEventId=null;try{const [ownerSent,wifeSent]=await Promise.all([sendWhatsApp(OWNER_WHATSAPP,bookingMsg(b)),sendWhatsApp(WIFE_WHATSAPP,bookingMsg(b))]);whatsappSent=ownerSent&&wifeSent}catch(e){console.error('WhatsApp:',e.message)}try{calendarEventId=await createCalendar(b)}catch(e){console.error('Calendar:',e.message)}await pool.query('UPDATE cps_bookings SET whatsapp_sent=$1,calendar_event_id=$2,updated_at=NOW() WHERE id=$3',[whatsappSent,calendarEventId,id]);res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,whatsappSent,calendarCreated:Boolean(calendarEventId),contactUrl:'https://wa.me/'+WIFE_WHATSAPP});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados informados.'});console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});}});
 
 app.post('/api/setup',needDb,async(req,res)=>{try{
   const configured=await pool.query('SELECT COUNT(*)::int AS n FROM cps_users WHERE active=TRUE');
@@ -232,7 +195,7 @@ app.get('/api/admin/bookings',needAuth,needDb,async(req,res)=>{const st=text(req
 app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{const st=text(req.body.status,30);if(!STATUS_KEYS.includes(st))return res.status(400).json({error:'Status inválido.'});const q=await pool.query('UPDATE cps_bookings SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[st,req.params.id]);if(!q.rowCount)return res.status(404).json({error:'Agendamento não encontrado.'});await audit(req,'update_booking_status','booking',req.params.id,{status:st});res.json({booking:mapBooking(q.rows[0])});});
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
-app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host');res.json({database:true,emailAutomatic:Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS),whatsappAutomatic:Boolean(process.env.WHATSAPP_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID),googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
+app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host');res.json({database:true,whatsappAutomatic:Boolean(process.env.WHATSAPP_TOKEN&&process.env.WHATSAPP_PHONE_NUMBER_ID),googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
 
 app.get('/api/admin/vaccines',needAuth,needDb,async(req,res)=>{try{
   const [due,cards]=await Promise.all([
