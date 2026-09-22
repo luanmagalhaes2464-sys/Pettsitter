@@ -76,6 +76,9 @@ function bookingMsg(b){
   const tutorChat='https://wa.me/'+waPhone(b.phone);
   return ['🐾 Nova pré-solicitação — Casal Pet Sitter','Código: '+b.id,'Serviço: '+SERVICE[b.service],'Período: '+dateBr(b.startDate)+' a '+dateBr(b.endDate),['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,'Tutor: '+b.tutorName,'Telefone: '+b.phone,'Falar com o tutor: '+tutorChat,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Cálculo: '+b.priceDetail,'Status: aguardando confirmação de disponibilidade.'].filter(Boolean).join('\n');
 }
+function customerBookingMsg(b){
+  return ['Olá! 🐾 Fiz uma pré-reserva pelo site do Casal Pet Sitter.','Código: '+b.id.slice(0,8),'Nome: '+b.tutorName,'Serviço: '+SERVICE[b.service],'Período: '+dateBr(b.startDate)+' a '+dateBr(b.endDate),['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,'Telefone informado: '+b.phone,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Gostaria de confirmar a disponibilidade.'].filter(Boolean).join('\n');
+}
 
 async function sendBookingEmail(b){
   const host=process.env.SMTP_HOST, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS;
@@ -139,7 +142,7 @@ app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{
   let emailSent=false;
   try{emailSent=await sendBookingEmail(b)}catch(e){console.error('Email:',e.message)}
   await pool.query('UPDATE cps_bookings SET email_sent=$1,updated_at=NOW() WHERE id=$2',[emailSent,id]);
-  res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,emailSent,contactUrl:'https://wa.me/'+WIFE_WHATSAPP});
+  const customerWhatsAppUrl='https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(b));res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,emailSent,customerWhatsAppUrl});
 }catch(e){
   if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados informados.'});
   console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});
