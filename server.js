@@ -282,6 +282,7 @@ app.post('/api/admin/vaccinations',needAuth,needCsrf,needDb,async(req,res)=>{con
 app.get('/api/admin/finance',needAuth,needDb,async(req,res)=>{const [p,e]=await Promise.all([pool.query('SELECT p.id,p.booking_id,p.amount,p.method,p.paid_at,p.note,p.created_at,b.tutor_name,b.service FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id ORDER BY p.paid_at DESC,p.created_at DESC LIMIT 500'),pool.query('SELECT id,amount,category,occurred_at,note,created_at FROM cps_expenses ORDER BY occurred_at DESC,created_at DESC LIMIT 500')]);res.json({payments:p.rows.map(x=>({...x,amount:Number(x.amount)})),expenses:e.rows.map(x=>({...x,amount:Number(x.amount)}))});});
 
 
+app.use('/api',(req,res)=>res.status(404).json({error:'Rota da API não encontrada. Atualize a página e tente novamente.'}));
 function icsEscape(v=''){return String(v).replace(/\\/g,'\\\\').replace(/\r?\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}
 function isoDay(v){return v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10)}
 function icsDate(v){return isoDay(v).replace(/-/g,'')}
