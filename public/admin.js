@@ -18,7 +18,6 @@ async function loadIntegrations(){try{
   const cards=$('#integrationCards');
   if(cards)cards.innerHTML=[
     ['Banco de dados',j.database?'Conectado':'Indisponível',j.database?'Histórico e financeiro estão persistentes.':'O sistema não consegue gravar dados.'],
-    ['E-mail automático',j.emailAutomatic?'Ativo':'Pendente',j.emailAutomatic?'Cada pré-reserva é enviada para Luan e Isabela com convite de calendário.':'Configure SMTP no Render para enviar a pré-reserva aos dois e-mails.'],
     ['WhatsApp automático',j.whatsappAutomatic?'Ativo':'Pendente',j.whatsappAutomatic?'O sistema dispara o alerta para Luan e Isabela, incluindo um link para conversar com o tutor.':'Configure a WhatsApp Business Platform (Cloud API) para receber os alertas automaticamente.'],
     ['Google Agenda via API',j.googleCalendarApi?'Ativo':'Opcional',j.googleCalendarApi?'Os eventos podem ser criados diretamente via API.':'A agenda por assinatura abaixo já funciona sem credenciais da API.'],
     ['Agenda compartilhada',j.calendarFeed?'Ativa':'Indisponível',j.calendarFeed?'Feed privado conectado aos agendamentos do sistema.':'Feed não configurado.']
