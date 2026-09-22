@@ -28,7 +28,7 @@ app.use(express.urlencoded({ extended: false, limit: '80kb' }));
 const PgStore = connectPgSimple(session);
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.createHash('sha256').update('casal-pet-sitter-session:'+DB).digest('hex');
 app.use(session({ store: DB ? new PgStore({ pool, tableName:'cps_session', createTableIfMissing:true }) : undefined, secret:SESSION_SECRET, resave:false, saveUninitialized:false, name:'cps.sid', cookie:{ httpOnly:true, secure:PROD, sameSite:'lax', maxAge:12*60*60*1000 } }));
-app.use(express.static(path.join(__dirname,'public'), { maxAge: PROD ? '1h' : 0 }));
+app.use(express.static(path.join(__dirname,'public'), { maxAge: 0, etag: true }));
 
 const OWNER_WHATSAPP = process.env.OWNER_WHATSAPP || '5532999108979';
 const WIFE_WHATSAPP = process.env.WIFE_WHATSAPP || '5531996377552';
