@@ -144,7 +144,7 @@ app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{
   await pool.query('UPDATE cps_bookings SET email_sent=$1,updated_at=NOW() WHERE id=$2',[emailSent,id]);
   const customerWhatsAppUrl='https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(b));res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,emailSent,customerWhatsAppUrl});
 }catch(e){
-  if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados informados.'});
+  if(e instanceof z.ZodError){const field=e.issues?.[0]?.path?.[0];const messages={service:'Selecione o serviço.',startDate:'Informe a data inicial.',endDate:'Informe a data final.',visits:'Confira a quantidade de visitas por dia.',tutorName:'Informe o nome completo do tutor.',phone:'Informe um telefone/WhatsApp válido.',street:'Informe a rua e o número.',neighborhood:'Informe o bairro.',animalCount:'Informe a quantidade de animais.',animals:'Informe quais são os animais, por exemplo: "1 cão", "2 gatos" ou "Thor (cão)".',notes:'Confira as observações.'};return res.status(400).json({error:messages[field]||'Confira os dados informados.',field});}
   console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});
 }});
 
