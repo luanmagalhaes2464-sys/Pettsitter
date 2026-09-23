@@ -25,6 +25,7 @@ async function loadIntegrations(){try{
   if($('#calendarFeedUrl'))$('#calendarFeedUrl').value=j.calendarFeedUrl||'';
 }catch(e){console.error(e)}}
 if($('#copyCalendarFeed'))$('#copyCalendarFeed').addEventListener('click',async()=>{const input=$('#calendarFeedUrl'),msg=$('#copyCalendarMessage');try{await navigator.clipboard.writeText(input.value);msg.className='form-message success';msg.textContent='URL copiada.'}catch{input.select();document.execCommand('copy');msg.className='form-message success';msg.textContent='URL copiada.'}});
+if($('#testEmailBtn'))$('#testEmailBtn').addEventListener('click',async()=>{const btn=$('#testEmailBtn'),msg=$('#testEmailMessage');btn.disabled=true;msg.className='form-message';msg.textContent='Enviando...';try{await api('/api/admin/integrations/test-email',{method:'POST',body:'{}'});msg.className='form-message success';msg.textContent='E-mail enviado para Luan e Isabela. Confira também a caixa de spam.'}catch(e){msg.className='form-message error';msg.textContent=e.message}finally{btn.disabled=false}});
 
 async function loadVaccines(){try{
   const j=await api('/api/admin/vaccines');

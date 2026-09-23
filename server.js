@@ -84,8 +84,8 @@ function customerBookingMsg(b){
 async function sendBookingEmail(b){
   const host=process.env.SMTP_HOST, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS;
   if(!host||!user||!pass) return false;
-  const port=Number(process.env.SMTP_PORT||465);
-  const secure=String(process.env.SMTP_SECURE??'true').toLowerCase()==='true';
+  const port=Number(process.env.SMTP_PORT||587);
+  const secure=String(process.env.SMTP_SECURE??'false').toLowerCase()==='true';
   const transporter=nodemailer.createTransport({host,port,secure,connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,auth:{user,pass}});
   const subject='🐾 Nova pré-reserva • '+SERVICE[b.service]+' • '+b.tutorName+' • '+dateBr(b.startDate);
   const tutorUrl='https://wa.me/'+waPhone(b.phone);
@@ -261,6 +261,15 @@ app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
 app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host');res.json({database:true,emailAutomatic:Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS),googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
+app.post('/api/admin/integrations/test-email',needAuth,needCsrf,async(req,res)=>{try{
+  const host=process.env.SMTP_HOST,user=process.env.SMTP_USER,pass=process.env.SMTP_PASS;
+  if(!host||!user||!pass)return res.status(400).json({error:'O envio de e-mail ainda não está configurado no Render.'});
+  const port=Number(process.env.SMTP_PORT||587),secure=String(process.env.SMTP_SECURE??'false').toLowerCase()==='true';
+  const transporter=nodemailer.createTransport({host,port,secure,connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,auth:{user,pass}});
+  await transporter.sendMail({from:process.env.EMAIL_FROM||('Casal Pet Sitter <'+user+'>'),to:[OWNER_EMAIL,WIFE_EMAIL].join(','),subject:'✅ Teste de e-mail — Casal Pet Sitter',text:'O alerta por e-mail está funcionando. As novas pré-reservas serão enviadas para vocês e continuarão salvas em Atendimentos. Para entrar na agenda, altere o status para Confirmada na Área do Casal.'});
+  await audit(req,'test_email','integration','smtp');
+  res.json({ok:true});
+}catch(e){console.error('Email test:',e.message);res.status(502).json({error:'O provedor de e-mail recusou ou não respondeu. Confira a senha de app do Gmail no Render.'})}});
 
 app.get('/api/admin/vaccines',needAuth,needDb,async(req,res)=>{try{
   const [due,cards]=await Promise.all([
