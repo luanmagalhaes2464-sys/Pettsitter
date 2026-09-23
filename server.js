@@ -47,14 +47,20 @@ const d = v => new Date(String(v)+'T12:00:00-03:00');
 const daysInclusive = (a,b) => Math.max(0,Math.floor((d(b)-d(a))/86400000)+1);
 const stayDays = (a,b) => Math.max(1,Math.ceil((d(b)-d(a))/86400000));
 
-function calc(service,start,end,visits){
+function calc(service,start,end,visits,counts={}){
   const n = Math.max(1,Math.min(10,Number(visits||1)));
+  const dogs=Math.max(0,Number(counts.dogCount||0)),cats=Math.max(0,Number(counts.catCount||0));
+  const smallPets=['birdCount','hamsterCount','guineaPigCount','fishCount','otherCount'].reduce((sum,key)=>sum+Math.max(0,Number(counts[key]||0)),0);
   const days = daysInclusive(start,end);
   if (!days) throw new Error('Período inválido.');
-  if (service==='pet_sitter') return { total:days*n*35, detail:days+' dia(s) × '+n+' visita(s)/dia × R$ 35' };
-  if (service==='pet_sitter_passeio') return { total:days*n*50, detail:days+' dia(s) × '+n+' visita(s)/dia × (R$ 35 + R$ 15)' };
-  if (service==='passeio') return { total:days*50, detail:days+' passeio(s) de 30 min × R$ 50' };
-  if (service==='hospedagem') { const q=stayDays(start,end), rate=q>5?65:70; return { total:q*rate, detail:q+' diária(s) × '+money(rate) }; }
+  if (service==='pet_sitter') return { total:days*n*35, detail:days+' dia(s) × '+n+' visita(s)/dia × R$ 35 (sem acréscimo por quantidade de animais)' };
+  if (service==='pet_sitter_passeio') { const rate=35+(15*dogs);return { total:days*n*rate, detail:days+' dia(s) × '+n+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))' }; }
+  if (service==='passeio') return { total:days*dogs*50, detail:days+' passeio(s) × '+dogs+' cão(ães) × R$ 50' };
+  if (service==='hospedagem') {
+    const q=stayDays(start,end),billable=dogs+cats,known=q*billable*65;
+    if(smallPets>0||billable===0)return {total:null,detail:(billable?q+' diária(s) × '+billable+' cão/gato × R$ 65 = '+money(known)+'; ':'')+'demais animais: valor a validar'};
+    return { total:known, detail:q+' diária(s) × '+billable+' cão/gato × R$ 65' };
+  }
   if (service==='vacinacao') return { total:null, detail:'Valor definido após avaliação do protocolo e da vacina indicada.' };
   throw new Error('Serviço inválido.');
 }
@@ -81,12 +87,24 @@ function customerBookingMsg(b){
   return ['Olá! 🐾 Fiz uma pré-reserva pelo site do Casal Pet Sitter.','Código: '+b.id.slice(0,8),'Nome: '+b.tutorName,'Serviço: '+SERVICE[b.service],'Período: '+dateBr(b.startDate)+' a '+dateBr(b.endDate),['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,'Telefone informado: '+b.phone,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Gostaria de confirmar a disponibilidade.'].filter(Boolean).join('\n');
 }
 
-async function sendBookingEmail(b){
-  const host=process.env.SMTP_HOST, user=process.env.SMTP_USER, pass=process.env.SMTP_PASS;
-  if(!host||!user||!pass) return false;
-  const port=Number(process.env.SMTP_PORT||587);
-  const secure=String(process.env.SMTP_SECURE??'false').toLowerCase()==='true';
+async function deliverEmail({subject,text:plainText,html}){
+  const recipients=[OWNER_EMAIL,WIFE_EMAIL];
+  if(process.env.BREVO_API_KEY){
+    const senderEmail=process.env.BREVO_SENDER_EMAIL||process.env.SMTP_USER||OWNER_EMAIL;
+    const response=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{accept:'application/json','content-type':'application/json','api-key':process.env.BREVO_API_KEY},body:JSON.stringify({sender:{name:'Casal Pet Sitter',email:senderEmail},to:recipients.map(email=>({email})),subject,htmlContent:html||undefined,textContent:plainText})});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error('Brevo API '+response.status+': '+(result.message||'falha no envio'));
+    return true;
+  }
+  const host=process.env.SMTP_HOST,user=process.env.SMTP_USER,pass=process.env.SMTP_PASS;
+  if(!host||!user||!pass)return false;
+  const port=Number(process.env.SMTP_PORT||587),secure=String(process.env.SMTP_SECURE??'false').toLowerCase()==='true';
   const transporter=nodemailer.createTransport({host,port,secure,connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,auth:{user,pass}});
+  await transporter.sendMail({from:process.env.EMAIL_FROM||('Casal Pet Sitter <'+user+'>'),to:recipients.join(','),subject,text:plainText,html});
+  return true;
+}
+
+async function sendBookingEmail(b){
   const subject='🐾 Nova pré-reserva • '+SERVICE[b.service]+' • '+b.tutorName+' • '+dateBr(b.startDate);
   const tutorUrl='https://wa.me/'+waPhone(b.phone);
   const panelUrl=process.env.APP_BASE_URL||'https://casal-pet-sitter.onrender.com';
@@ -104,14 +122,7 @@ async function sendBookingEmail(b){
     <p><a href="${panelUrl}/login">Abrir painel administrativo para confirmar ou recusar</a></p>
     <hr><p style="color:#74685c;font-size:13px">A pré-reserva só entra na agenda depois que vocês alterarem o status para Confirmada.</p>
   </div>`;
-  await transporter.sendMail({
-    from:process.env.EMAIL_FROM||('Casal Pet Sitter <'+user+'>'),
-    to:[OWNER_EMAIL,WIFE_EMAIL].join(','),
-    subject,
-    text:bookingMsg(b)+'\n\nAbra o painel para confirmar: '+panelUrl+'/login',
-    html
-  });
-  return true;
+  return deliverEmail({subject,text:bookingMsg(b)+'\n\nAbra o painel para confirmar: '+panelUrl+'/login',html});
 }
 async function createCalendar(b){
   const client=process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, key=(process.env.GOOGLE_PRIVATE_KEY||'').replace(/\\n/g,'\n'), calendarId=process.env.GOOGLE_CALENDAR_ID;
@@ -123,7 +134,14 @@ async function createCalendar(b){
   return r.data.id||null;
 }
 
-const bookingSchema=z.object({service:z.enum(['pet_sitter','pet_sitter_passeio','passeio','hospedagem','vacinacao']),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10).default(1),tutorName:z.string().trim().min(2).max(140),phone:z.string().trim().min(8).max(40),street:z.string().trim().min(3).max(220),neighborhood:z.string().trim().min(2).max(140),animalCount:z.coerce.number().int().min(1).max(30),animals:z.string().trim().min(2).max(300),notes:z.string().trim().max(1200).optional().default('')});
+const bookingSchema=z.object({service:z.enum(['pet_sitter','pet_sitter_passeio','passeio','hospedagem','vacinacao']),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10).default(1),tutorName:z.string().trim().min(2).max(140),phone:z.string().trim().min(8).max(40),street:z.string().trim().min(3).max(220),neighborhood:z.string().trim().min(2).max(140),dogCount:z.coerce.number().int().min(0).max(30).default(0),catCount:z.coerce.number().int().min(0).max(30).default(0),birdCount:z.coerce.number().int().min(0).max(30).default(0),hamsterCount:z.coerce.number().int().min(0).max(30).default(0),guineaPigCount:z.coerce.number().int().min(0).max(30).default(0),fishCount:z.coerce.number().int().min(0).max(100).default(0),otherCount:z.coerce.number().int().min(0).max(30).default(0),petNames:z.string().trim().max(180).optional().default(''),otherAnimals:z.string().trim().max(120).optional().default(''),animalCount:z.coerce.number().int().min(1).max(100).optional(),animals:z.string().trim().max(300).optional(),notes:z.string().trim().max(1200).optional().default('')});
+function normalizeAnimals(p){
+  const items=[['dogCount','cão(ães)'],['catCount','gato(s)'],['birdCount','ave(s)'],['hamsterCount','hamster(s)'],['guineaPigCount','porquinho(s)-da-índia'],['fishCount','peixe(s)'],['otherCount',p.otherAnimals||'outro(s)']];
+  let total=items.reduce((sum,[key])=>sum+Number(p[key]||0),0);
+  if(!total&&p.animalCount){total=Number(p.animalCount);if(['passeio','pet_sitter_passeio','hospedagem'].includes(p.service))p.dogCount=total;return{total,summary:p.animals||total+' animal(is)'};}
+  const summary=items.filter(([key])=>Number(p[key]||0)>0).map(([key,label])=>p[key]+' '+label).join(', ')+(p.petNames?' — nomes: '+p.petNames:'');
+  return{total,summary};
+}
 const bookingLimiter=rateLimit({windowMs:10*60*1000,limit:20,standardHeaders:true,legacyHeaders:false});
 const loginLimiter=rateLimit({windowMs:15*60*1000,limit:10,standardHeaders:true,legacyHeaders:false,skipSuccessfulRequests:true});
 function needDb(req,res,next){ if(!DB)return res.status(503).json({error:'Banco de dados não configurado.'}); next(); }
@@ -135,18 +153,20 @@ function mapBooking(r){ return {id:r.id,service:r.service,serviceLabel:SERVICE[r
 
 app.get('/api/health',async(_req,res)=>{let db=false;if(DB){try{await pool.query('SELECT 1');db=true}catch{}}res.json({ok:true,db,version:'2.1.0'})});
 app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{
-  const p=bookingSchema.parse(req.body);
+  const parsed=bookingSchema.parse(req.body),animalInfo=normalizeAnimals(parsed),p={...parsed,animalCount:animalInfo.total,animals:animalInfo.summary};
+  if(p.animalCount<1)return res.status(400).json({error:'Informe pelo menos um animal.'});
+  if(['passeio','pet_sitter_passeio'].includes(p.service)&&p.dogCount<1)return res.status(400).json({error:'Para passeio, informe pelo menos um cão.'});
   const today=new Date();today.setHours(0,0,0,0);
   if(d(p.startDate)<today||d(p.endDate)<d(p.startDate))return res.status(400).json({error:'Confira as datas informadas.'});
   const requestId=z.string().uuid().optional().parse(req.body.requestId);
   if(requestId){const existing=await pool.query('SELECT * FROM cps_bookings WHERE id=$1',[requestId]);if(existing.rowCount){const saved=mapBooking(existing.rows[0]);if(saved.phone!==p.phone||saved.tutorName!==p.tutorName||saved.service!==p.service||saved.startDate!==p.startDate||saved.endDate!==p.endDate)return res.status(409).json({error:'A solicitação anterior já foi registrada. Atualize a página para enviar outra.'});return res.json({ok:true,id:saved.id,total:saved.estimatedTotal,priceDetail:saved.priceDetail,customerWhatsAppUrl:'https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(saved))})}}
-  const price=calc(p.service,p.startDate,p.endDate,p.visits),id=requestId||crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};
+  const price=calc(p.service,p.startDate,p.endDate,p.visits,p),id=requestId||crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};
   await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO NOTHING',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);
   const customerWhatsAppUrl='https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(b));
   res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,customerWhatsAppUrl});
   sendBookingEmail(b).then(sent=>pool.query('UPDATE cps_bookings SET email_sent=$1 WHERE id=$2',[sent,id])).catch(e=>console.error('Email:',e.message));
 }catch(e){
-  if(e instanceof z.ZodError){const field=e.issues?.[0]?.path?.[0];const messages={service:'Selecione o serviço.',startDate:'Informe a data inicial.',endDate:'Informe a data final.',visits:'Confira a quantidade de visitas por dia.',tutorName:'Informe o nome completo do tutor.',phone:'Informe um telefone/WhatsApp válido.',street:'Informe a rua e o número.',neighborhood:'Informe o bairro.',animalCount:'Informe a quantidade de animais.',animals:'Informe quais são os animais, por exemplo: "1 cão", "2 gatos" ou "Thor (cão)".',notes:'Confira as observações.'};return res.status(400).json({error:messages[field]||'Confira os dados informados.',field});}
+  if(e instanceof z.ZodError){const field=e.issues?.[0]?.path?.[0];const messages={service:'Selecione o serviço.',startDate:'Informe a data inicial.',endDate:'Informe a data final.',visits:'Confira a quantidade de visitas por dia.',tutorName:'Informe o nome completo do tutor.',phone:'Informe um telefone/WhatsApp válido.',street:'Informe a rua e o número.',neighborhood:'Informe o bairro.',dogCount:'Confira a quantidade de cães.',catCount:'Confira a quantidade de gatos.',birdCount:'Confira a quantidade de aves.',hamsterCount:'Confira a quantidade de hamsters.',guineaPigCount:'Confira a quantidade de porquinhos-da-índia.',fishCount:'Confira a quantidade de peixes.',otherCount:'Confira a quantidade de outros animais.',notes:'Confira as observações.'};return res.status(400).json({error:messages[field]||'Confira os dados informados.',field});}
   console.error(e);res.status(500).json({error:'Não foi possível salvar a solicitação agora.'});
 }});
 
@@ -260,16 +280,13 @@ app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{
 });
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
-app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host');res.json({database:true,emailAutomatic:Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS),googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
+app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host'),apiEmail=Boolean(process.env.BREVO_API_KEY),smtpEmail=Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS);res.json({database:true,emailAutomatic:apiEmail||smtpEmail,emailProvider:apiEmail?'API HTTPS (Brevo)':(smtpEmail?'SMTP — bloqueado no plano gratuito do Render':'Não configurado'),emailApi:apiEmail,googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
 app.post('/api/admin/integrations/test-email',needAuth,needCsrf,async(req,res)=>{try{
-  const host=process.env.SMTP_HOST,user=process.env.SMTP_USER,pass=process.env.SMTP_PASS;
-  if(!host||!user||!pass)return res.status(400).json({error:'O envio de e-mail ainda não está configurado no Render.'});
-  const port=Number(process.env.SMTP_PORT||587),secure=String(process.env.SMTP_SECURE??'false').toLowerCase()==='true';
-  const transporter=nodemailer.createTransport({host,port,secure,connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000,auth:{user,pass}});
-  await transporter.sendMail({from:process.env.EMAIL_FROM||('Casal Pet Sitter <'+user+'>'),to:[OWNER_EMAIL,WIFE_EMAIL].join(','),subject:'✅ Teste de e-mail — Casal Pet Sitter',text:'O alerta por e-mail está funcionando. As novas pré-reservas serão enviadas para vocês e continuarão salvas em Atendimentos. Para entrar na agenda, altere o status para Confirmada na Área do Casal.'});
-  await audit(req,'test_email','integration','smtp');
+  const sent=await deliverEmail({subject:'✅ Teste de e-mail — Casal Pet Sitter',text:'O alerta por e-mail está funcionando. As novas pré-reservas serão enviadas para vocês e continuarão salvas em Atendimentos. Para entrar na agenda, altere o status para Confirmada na Área do Casal.'});
+  if(!sent)return res.status(400).json({error:'O envio de e-mail ainda não está configurado.'});
+  await audit(req,'test_email','integration',process.env.BREVO_API_KEY?'brevo':'smtp');
   res.json({ok:true});
-}catch(e){console.error('Email test:',e.message);res.status(502).json({error:'O provedor de e-mail recusou ou não respondeu. Confira a senha de app do Gmail no Render.'})}});
+}catch(e){console.error('Email test:',e.message);res.status(502).json({error:process.env.BREVO_API_KEY?'A API de e-mail recusou o envio. Confira a chave e o remetente verificado no Brevo.':'O plano gratuito do Render bloqueia conexões SMTP. Configure a API HTTPS de e-mail na integração.'})}});
 
 app.get('/api/admin/vaccines',needAuth,needDb,async(req,res)=>{try{
   const [due,cards]=await Promise.all([
