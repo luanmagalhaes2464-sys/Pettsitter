@@ -1,9 +1,14 @@
 function doPost(e) {
   try {
     const payload = JSON.parse(e.postData.contents || '{}');
-    const expectedSecret = PropertiesService.getScriptProperties().getProperty('EMAIL_WEBHOOK_SECRET');
+    const properties = PropertiesService.getScriptProperties();
+    const expectedSecret = properties.getProperty('EMAIL_WEBHOOK_SECRET_V2') || properties.getProperty('EMAIL_WEBHOOK_SECRET');
     if (!expectedSecret || payload.secret !== expectedSecret) {
       return jsonResponse({ ok: false, error: 'Não autorizado.' });
+    }
+
+    if (payload.action === 'calendar_create') {
+      return createCalendarEvent(payload);
     }
 
     const allowedRecipients = [
@@ -28,6 +33,34 @@ function doPost(e) {
   } catch (error) {
     return jsonResponse({ ok: false, error: String(error && error.message || error) });
   }
+}
+
+function createCalendarEvent(payload) {
+  if (!payload.title || !payload.startDate || !payload.endDate) {
+    return jsonResponse({ ok: false, error: 'Dados da agenda incompletos.' });
+  }
+
+  const start = dateAtNoon(payload.startDate);
+  const endExclusive = dateAtNoon(payload.endDate);
+  endExclusive.setDate(endExclusive.getDate() + 1);
+  const event = CalendarApp.getDefaultCalendar().createAllDayEvent(
+    String(payload.title).slice(0, 180),
+    start,
+    endExclusive,
+    {
+      description: String(payload.description || ''),
+      location: String(payload.location || ''),
+      guests: 'belaisapr@gmail.com',
+      sendInvites: true
+    }
+  );
+  return jsonResponse({ ok: true, eventId: event.getId() });
+}
+
+function dateAtNoon(value) {
+  const parts = String(value).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) throw new Error('Data inválida.');
+  return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
 }
 
 function jsonResponse(value) {
