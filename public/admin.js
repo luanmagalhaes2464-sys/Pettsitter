@@ -18,7 +18,7 @@ async function loadIntegrations(){try{
   const cards=$('#integrationCards');
   if(cards)cards.innerHTML=[
     ['Banco de dados',j.database?'Conectado':'Indisponível',j.database?'Histórico e financeiro estão persistentes.':'O sistema não consegue gravar dados.'],
-    ['E-mail de nova pré-reserva',j.emailApi?'Ativo':(j.emailAutomatic?'Aguardando API':'Pendente'),j.emailApi?'Envio por API HTTPS ativo ('+j.emailProvider+').':'O SMTP é bloqueado no plano gratuito do Render. É necessário conectar a API gratuita do Brevo; as solicitações continuam salvas em Atendimentos.'],
+    ['E-mail de nova pré-reserva',j.emailApi?'Ativo':(j.emailAutomatic?'Aguardando Google':'Pendente'),j.emailApi?'Envio ativo pelo '+j.emailProvider+'.':'O SMTP é bloqueado no plano gratuito do Render. Conecte o Gmail do Luan pelo Google HTTPS; as solicitações continuam salvas em Atendimentos.'],
 
     ['Agenda compartilhada',j.calendarFeed?'Ativa':'Indisponível',j.calendarFeed?'Feed privado conectado aos agendamentos do sistema.':'Feed não configurado.']
   ].map(x=>`<article class="panel-card"><div class="eyebrow">${esc(x[0])}</div><h2>${esc(x[1])}</h2><p class="muted">${esc(x[2])}</p></article>`).join('');

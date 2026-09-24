@@ -89,11 +89,10 @@ function customerBookingMsg(b){
 
 async function deliverEmail({subject,text:plainText,html}){
   const recipients=[OWNER_EMAIL,WIFE_EMAIL];
-  if(process.env.BREVO_API_KEY){
-    const senderEmail=process.env.BREVO_SENDER_EMAIL||process.env.SMTP_USER||OWNER_EMAIL;
-    const response=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{accept:'application/json','content-type':'application/json','api-key':process.env.BREVO_API_KEY},body:JSON.stringify({sender:{name:'Casal Pet Sitter',email:senderEmail},to:recipients.map(email=>({email})),subject,htmlContent:html||undefined,textContent:plainText})});
+  if(process.env.GOOGLE_EMAIL_WEBHOOK_URL&&process.env.GOOGLE_EMAIL_WEBHOOK_SECRET){
+    const response=await fetch(process.env.GOOGLE_EMAIL_WEBHOOK_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({secret:process.env.GOOGLE_EMAIL_WEBHOOK_SECRET,to:recipients,subject,text:plainText,html})});
     const result=await response.json().catch(()=>({}));
-    if(!response.ok)throw new Error('Brevo API '+response.status+': '+(result.message||'falha no envio'));
+    if(!response.ok||!result.ok)throw new Error('Google Mail webhook '+response.status+': '+(result.error||'falha no envio'));
     return true;
   }
   const host=process.env.SMTP_HOST,user=process.env.SMTP_USER,pass=process.env.SMTP_PASS;
@@ -280,13 +279,13 @@ app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{
 });
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.enum(['pix','dinheiro','cartao','transferencia','outro']),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,p.method,p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
-app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host'),apiEmail=Boolean(process.env.BREVO_API_KEY),smtpEmail=Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS);res.json({database:true,emailAutomatic:apiEmail||smtpEmail,emailProvider:apiEmail?'API HTTPS (Brevo)':(smtpEmail?'SMTP — bloqueado no plano gratuito do Render':'Não configurado'),emailApi:apiEmail,googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
+app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host'),apiEmail=Boolean(process.env.GOOGLE_EMAIL_WEBHOOK_URL&&process.env.GOOGLE_EMAIL_WEBHOOK_SECRET),smtpEmail=Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS);res.json({database:true,emailAutomatic:apiEmail||smtpEmail,emailProvider:apiEmail?'Gmail do Luan via Google HTTPS':(smtpEmail?'SMTP — bloqueado no plano gratuito do Render':'Não configurado'),emailApi:apiEmail,googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
 app.post('/api/admin/integrations/test-email',needAuth,needCsrf,async(req,res)=>{try{
   const sent=await deliverEmail({subject:'✅ Teste de e-mail — Casal Pet Sitter',text:'O alerta por e-mail está funcionando. As novas pré-reservas serão enviadas para vocês e continuarão salvas em Atendimentos. Para entrar na agenda, altere o status para Confirmada na Área do Casal.'});
   if(!sent)return res.status(400).json({error:'O envio de e-mail ainda não está configurado.'});
-  await audit(req,'test_email','integration',process.env.BREVO_API_KEY?'brevo':'smtp');
+  await audit(req,'test_email','integration',process.env.GOOGLE_EMAIL_WEBHOOK_URL?'google_mail':'smtp');
   res.json({ok:true});
-}catch(e){console.error('Email test:',e.message);res.status(502).json({error:process.env.BREVO_API_KEY?'A API de e-mail recusou o envio. Confira a chave e o remetente verificado no Brevo.':'O plano gratuito do Render bloqueia conexões SMTP. Configure a API HTTPS de e-mail na integração.'})}});
+}catch(e){console.error('Email test:',e.message);res.status(502).json({error:process.env.GOOGLE_EMAIL_WEBHOOK_URL?'O Google recusou o envio. Confira a autorização do Gmail.':'O plano gratuito do Render bloqueia conexões SMTP. Conecte o envio pelo Google HTTPS.'})}});
 
 app.get('/api/admin/vaccines',needAuth,needDb,async(req,res)=>{try{
   const [due,cards]=await Promise.all([
