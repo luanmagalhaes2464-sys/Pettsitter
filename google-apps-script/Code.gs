@@ -10,6 +10,12 @@ function doPost(e) {
     if (payload.action === 'calendar_create') {
       return createCalendarEvent(payload);
     }
+    if (payload.action === 'calendar_delete') {
+      return deleteCalendarEvent(payload);
+    }
+    if (payload.action === 'calendar_check') {
+      return checkCalendarAccess();
+    }
 
     const allowedRecipients = [
       'luanmagalhaes2464@gmail.com',
@@ -55,6 +61,24 @@ function createCalendarEvent(payload) {
     }
   );
   return jsonResponse({ ok: true, eventId: event.getId() });
+}
+
+function deleteCalendarEvent(payload) {
+  if (!payload.eventId) {
+    return jsonResponse({ ok: false, error: 'Evento não informado.' });
+  }
+  const event = CalendarApp.getDefaultCalendar().getEventById(String(payload.eventId));
+  if (event) event.deleteEvent();
+  return jsonResponse({ ok: true });
+}
+
+function checkCalendarAccess() {
+  const calendar = CalendarApp.getDefaultCalendar();
+  return jsonResponse({ ok: true, calendarName: calendar.getName() });
+}
+
+function authorizeCalendar() {
+  return CalendarApp.getDefaultCalendar().getName();
 }
 
 function dateAtNoon(value) {
