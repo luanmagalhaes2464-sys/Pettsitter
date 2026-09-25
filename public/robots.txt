@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /login
+Disallow: /setup
+Disallow: /api/
+
+Sitemap: https://casal-pet-sitter.onrender.com/sitemap.xml

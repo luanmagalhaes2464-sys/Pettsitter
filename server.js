@@ -324,7 +324,7 @@ app.delete('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{t
   if(!found.rowCount)return res.status(404).json({error:'Atendimento não encontrado.'});
   const booking=found.rows[0];
   if(booking.calendar_event_id)await deleteCalendarEvent(booking.calendar_event_id);
-  await audit(req,'delete_booking','booking',booking.id,{tutorName:booking.tutor_name,service:booking.service,status:booking.status,calendarRemoved:Boolean(booking.calendar_event_id)});
+  await audit(req,'delete_booking','booking',booking.id,{service:booking.service,status:booking.status,calendarRemoved:Boolean(booking.calendar_event_id)});
   await pool.query('DELETE FROM cps_bookings WHERE id=$1',[booking.id]);
   res.json({ok:true});
 }catch(e){console.error('Delete booking:',e.message);res.status(502).json({error:'Não foi possível excluir com segurança. Se houver evento na agenda, confira a autorização do Google e tente novamente.'})}});
