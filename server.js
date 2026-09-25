@@ -145,6 +145,24 @@ async function createCalendar(b){
   return r.data.id||null;
 }
 
+async function calendarWebhook(action,payload={}){
+  if(!process.env.GOOGLE_EMAIL_WEBHOOK_URL||!process.env.GOOGLE_EMAIL_WEBHOOK_SECRET)return null;
+  const response=await fetch(process.env.GOOGLE_EMAIL_WEBHOOK_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,secret:process.env.GOOGLE_EMAIL_WEBHOOK_SECRET,...payload})});
+  const result=await response.json().catch(()=>({}));
+  if(!response.ok||!result.ok)throw new Error('Google Calendar webhook '+response.status+': '+(result.error||'falha na agenda'));
+  return result;
+}
+
+async function deleteCalendarEvent(eventId){
+  if(!eventId)return true;
+  if(process.env.GOOGLE_EMAIL_WEBHOOK_URL&&process.env.GOOGLE_EMAIL_WEBHOOK_SECRET){await calendarWebhook('calendar_delete',{eventId});return true;}
+  const client=process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,key=(process.env.GOOGLE_PRIVATE_KEY||'').replace(/\\n/g,'\n'),calendarId=process.env.GOOGLE_CALENDAR_ID;
+  if(!client||!key||!calendarId)return false;
+  const auth=new google.auth.JWT({email:client,key,scopes:['https://www.googleapis.com/auth/calendar']});
+  await google.calendar({version:'v3',auth}).events.delete({calendarId,eventId,sendUpdates:'all'});
+  return true;
+}
+
 const bookingSchema=z.object({service:z.enum(['pet_sitter','pet_sitter_passeio','passeio','hospedagem','vacinacao']),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10).default(1),tutorName:z.string().trim().min(2).max(140),phone:z.string().trim().min(8).max(40),street:z.string().trim().min(3).max(220),neighborhood:z.string().trim().min(2).max(140),dogCount:z.coerce.number().int().min(0).max(30).default(0),catCount:z.coerce.number().int().min(0).max(30).default(0),birdCount:z.coerce.number().int().min(0).max(30).default(0),hamsterCount:z.coerce.number().int().min(0).max(30).default(0),guineaPigCount:z.coerce.number().int().min(0).max(30).default(0),fishCount:z.coerce.number().int().min(0).max(100).default(0),otherCount:z.coerce.number().int().min(0).max(30).default(0),petNames:z.string().trim().max(180).optional().default(''),otherAnimals:z.string().trim().max(120).optional().default(''),animalCount:z.coerce.number().int().min(1).max(100).optional(),animals:z.string().trim().max(300).optional(),notes:z.string().trim().max(1200).optional().default('')});
 function normalizeAnimals(p){
   const items=[['dogCount','cão(ães)'],['catCount','gato(s)'],['birdCount','ave(s)'],['hamsterCount','hamster(s)'],['guineaPigCount','porquinho(s)-da-índia'],['fishCount','peixe(s)'],['otherCount',p.otherAnimals||'outro(s)']];
@@ -160,7 +178,7 @@ function needAuth(req,res,next){ if(!req.session.userId)return res.status(401).j
 function csrf(req){ if(!req.session.csrfToken)req.session.csrfToken=crypto.randomBytes(24).toString('hex'); return req.session.csrfToken; }
 function needCsrf(req,res,next){ if(!req.get('x-csrf-token')||req.get('x-csrf-token')!==req.session.csrfToken)return res.status(403).json({error:'Sessão expirada. Atualize a página.'}); next(); }
 async function audit(req,action,type,id,metadata={}){ if(!DB)return; try{await pool.query('INSERT INTO cps_audit_log(user_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,$4,$5)',[req.session.userId||null,action,type,id?String(id):null,metadata]);}catch(e){console.error('audit',e.message);} }
-function mapBooking(r){ return {id:r.id,service:r.service,serviceLabel:SERVICE[r.service]||r.service,startDate:r.start_date,endDate:r.end_date,visits:r.visits,tutorName:r.tutor_name,phone:r.phone,street:r.street,neighborhood:r.neighborhood,animalCount:r.animal_count,animals:r.animals,notes:r.notes,estimatedTotal:r.estimated_total==null?null:Number(r.estimated_total),priceDetail:r.price_detail,status:r.status,statusLabel:STATUS[r.status]||r.status,whatsappSent:r.whatsapp_sent,createdAt:r.created_at}; }
+function mapBooking(r){ return {id:r.id,service:r.service,serviceLabel:SERVICE[r.service]||r.service,startDate:r.start_date,endDate:r.end_date,visits:r.visits,tutorName:r.tutor_name,phone:r.phone,street:r.street,neighborhood:r.neighborhood,animalCount:r.animal_count,animals:r.animals,notes:r.notes,estimatedTotal:r.estimated_total==null?null:Number(r.estimated_total),priceDetail:r.price_detail,status:r.status,statusLabel:STATUS[r.status]||r.status,whatsappSent:r.whatsapp_sent,calendarLinked:Boolean(r.calendar_event_id),createdAt:r.created_at}; }
 
 app.get('/api/health',async(_req,res)=>{let db=false;if(DB){try{await pool.query('SELECT 1');db=true}catch{}}res.json({ok:true,db,version:'2.1.0'})});
 app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{
@@ -289,6 +307,27 @@ app.patch('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{
     res.json({booking:mapBooking(row),paymentCreated,calendarLinked});
   }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 });
+app.post('/api/admin/bookings/:id/calendar',needAuth,needCsrf,needDb,async(req,res)=>{try{
+  if(!z.string().uuid().safeParse(req.params.id).success)return res.status(400).json({error:'Atendimento inválido.'});
+  const found=await pool.query("SELECT * FROM cps_bookings WHERE id=$1 AND status IN ('confirmed','completed')",[req.params.id]);
+  if(!found.rowCount)return res.status(404).json({error:'Confirme o atendimento antes de vinculá-lo à agenda.'});
+  if(found.rows[0].calendar_event_id)return res.json({ok:true,calendarLinked:true});
+  const b=mapBooking(found.rows[0]),eventId=await createCalendar({...b,startDate:String(b.startDate).slice(0,10),endDate:String(b.endDate).slice(0,10)});
+  if(!eventId)return res.status(503).json({error:'A integração com o Google Agenda ainda não está configurada.'});
+  await pool.query('UPDATE cps_bookings SET calendar_event_id=$1,updated_at=NOW() WHERE id=$2',[eventId,req.params.id]);
+  await audit(req,'link_booking_calendar','booking',req.params.id);
+  res.json({ok:true,calendarLinked:true});
+}catch(e){console.error('Calendar retry:',e.message);res.status(502).json({error:'O Google Agenda recusou a vinculação. Autorize o calendário na guia Integrações e tente novamente.'})}});
+app.delete('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{try{
+  if(!z.string().uuid().safeParse(req.params.id).success)return res.status(400).json({error:'Atendimento inválido.'});
+  const found=await pool.query('SELECT id,tutor_name,service,status,calendar_event_id FROM cps_bookings WHERE id=$1',[req.params.id]);
+  if(!found.rowCount)return res.status(404).json({error:'Atendimento não encontrado.'});
+  const booking=found.rows[0];
+  if(booking.calendar_event_id)await deleteCalendarEvent(booking.calendar_event_id);
+  await audit(req,'delete_booking','booking',booking.id,{tutorName:booking.tutor_name,service:booking.service,status:booking.status,calendarRemoved:Boolean(booking.calendar_event_id)});
+  await pool.query('DELETE FROM cps_bookings WHERE id=$1',[booking.id]);
+  res.json({ok:true});
+}catch(e){console.error('Delete booking:',e.message);res.status(502).json({error:'Não foi possível excluir com segurança. Se houver evento na agenda, confira a autorização do Google e tente novamente.'})}});
 app.post('/api/admin/payments',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({bookingId:z.string().uuid().optional().or(z.literal('')),amount:z.coerce.number().positive().max(100000),method:z.literal('pix').optional().default('pix'),paidAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_payments(id,booking_id,amount,method,paid_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,p.bookingId||null,p.amount,'pix',p.paidAt,p.note,req.session.userId]);await audit(req,'create_payment','payment',id,{amount:p.amount,method:'pix'});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do recebimento.'});throw e}});
 app.post('/api/admin/expenses',needAuth,needCsrf,needDb,async(req,res)=>{const schema=z.object({amount:z.coerce.number().positive().max(100000),category:z.string().trim().min(2).max(100),occurredAt:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(300).optional().default('')});try{const p=schema.parse(req.body),id=crypto.randomUUID();await pool.query('INSERT INTO cps_expenses(id,amount,category,occurred_at,note,created_by) VALUES($1,$2,$3,$4,$5,$6)',[id,p.amount,p.category,p.occurredAt,p.note,req.session.userId]);await audit(req,'create_expense','expense',id,{amount:p.amount,category:p.category});res.status(201).json({ok:true,id});}catch(e){if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados da despesa.'});throw e}});
 app.get('/api/admin/integrations',needAuth,needDb,async(req,res)=>{const feedToken=process.env.CALENDAR_FEED_TOKEN||(process.env.SETUP_TOKEN?crypto.createHash('sha256').update(process.env.SETUP_TOKEN+':calendar').digest('hex').slice(0,32):'');const base=(req.headers['x-forwarded-proto']||req.protocol)+'://'+req.get('host'),apiEmail=Boolean(process.env.GOOGLE_EMAIL_WEBHOOK_URL&&process.env.GOOGLE_EMAIL_WEBHOOK_SECRET),smtpEmail=Boolean(process.env.SMTP_HOST&&process.env.SMTP_USER&&process.env.SMTP_PASS),calendarAutomatic=apiEmail||Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY);res.json({database:true,emailAutomatic:apiEmail||smtpEmail,emailProvider:apiEmail?'Gmail do Luan via Google HTTPS':(smtpEmail?'SMTP — bloqueado no plano gratuito do Render':'Não configurado'),emailApi:apiEmail,calendarAutomatic,googleCalendarApi:Boolean(process.env.GOOGLE_CALENDAR_ID&&process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL&&process.env.GOOGLE_PRIVATE_KEY),calendarFeed:Boolean(feedToken),calendarFeedUrl:feedToken?base+'/calendar/'+feedToken+'.ics':''})});
@@ -298,6 +337,12 @@ app.post('/api/admin/integrations/test-email',needAuth,needCsrf,async(req,res)=>
   await audit(req,'test_email','integration',process.env.GOOGLE_EMAIL_WEBHOOK_URL?'google_mail':'smtp');
   res.json({ok:true});
 }catch(e){console.error('Email test:',e.message);res.status(502).json({error:process.env.GOOGLE_EMAIL_WEBHOOK_URL?'O Google recusou o envio. Confira a autorização do Gmail.':'O plano gratuito do Render bloqueia conexões SMTP. Conecte o envio pelo Google HTTPS.'})}});
+app.post('/api/admin/integrations/check-calendar',needAuth,needCsrf,async(req,res)=>{try{
+  const result=await calendarWebhook('calendar_check');
+  if(!result)return res.status(400).json({error:'A integração com o Google Agenda ainda não está configurada.'});
+  await audit(req,'check_calendar','integration','google_calendar');
+  res.json({ok:true,calendarName:result.calendarName||'Agenda do Luan'});
+}catch(e){console.error('Calendar check:',e.message);res.status(502).json({error:'O Google Agenda ainda não foi autorizado. Conclua a autorização e teste novamente.'})}});
 
 app.get('/api/admin/vaccines',needAuth,needDb,async(req,res)=>{try{
   const [due,cards]=await Promise.all([
