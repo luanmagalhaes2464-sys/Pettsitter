@@ -20,14 +20,16 @@ async function loadBookings(){
   $$('.delete-booking').forEach(btn=>btn.addEventListener('click',()=>openDeleteDialog(btn.dataset.id)));
   fillBookingSelect();
 }
-let bookingEditorId='',adminPriceManual=false,adminSpecificDates=[];
+let bookingEditorId='',adminPriceManual=false,adminSpecificDates=[],adminSpecificSchedule=[];
 const adminCountNames=['dogCount','catCount','birdCount','hamsterCount','guineaPigCount','fishCount','otherCount'];
 function setBookingEditorField(name,value){const el=$('#bookingEditorForm [name="'+name+'"]');if(el)el.value=value==null?'':value}
 function adminCount(name){return Math.max(0,Number($('#bookingEditorForm [name="'+name+'"]')?.value||0))}
 function adminDate(v){return v?new Date(v+'T12:00:00'):null}
 function adminInclusiveDays(a,b){if(!a||!b||b<a)return 0;return Math.floor((b-a)/86400000)+1}
 function adminStayDays(a,b){if(!a||!b||b<a)return 0;return Math.max(1,Math.ceil((b-a)/86400000))}
-function renderAdminSpecificDates(){const el=$('#adminSpecificDateList');el.innerHTML=adminSpecificDates.length?adminSpecificDates.map(d=>`<button type="button" class="date-chip admin-date-chip" data-date="${d}">${dateFmt.format(new Date(d+'T12:00:00Z'))}<span>×</span></button>`).join(''):'<span class="muted">Nenhuma data adicionada.</span>'}
+function adminScheduleVisits(date){return Math.max(1,Math.min(10,Number(adminSpecificSchedule.find(x=>x.date===date)?.visits||$('#bookingEditorForm [name="visits"]')?.value||1)))}
+function syncAdminSchedule(){adminSpecificSchedule=adminSpecificDates.map(date=>({date,visits:adminScheduleVisits(date)}))}
+function renderAdminSpecificDates(){const el=$('#adminSpecificDateList'),service=$('#bookingEditorForm [name="service"]').value,withVisits=['pet_sitter','pet_sitter_passeio'].includes(service);syncAdminSchedule();el.innerHTML=adminSpecificDates.length?adminSpecificDates.map(d=>`<div class="date-schedule-row" data-date="${d}"><strong>${dateFmt.format(new Date(d+'T12:00:00Z'))}</strong>${withVisits?`<label>Visitas <input class="admin-specific-visit-input" data-date="${d}" type="number" min="1" max="10" value="${adminScheduleVisits(d)}"></label>`:''}<button type="button" class="date-remove admin-date-remove" data-date="${d}" aria-label="Remover data">×</button></div>`).join(''):'<span class="muted">Nenhuma data adicionada.</span>'}
 function parseAnimalSummary(summary,total=0){
   const s=String(summary||''),pick=re=>Number(s.match(re)?.[1]||0);
   const result={
@@ -42,11 +44,11 @@ function parseAnimalSummary(summary,total=0){
 }
 function updateAdminServiceFields(){
   const form=$('#bookingEditorForm'),service=form.elements.service.value,needsVisits=['pet_sitter','pet_sitter_passeio'].includes(service),needsAddress=service!=='hospedagem',supportsSpecific=['pet_sitter','pet_sitter_passeio','passeio'].includes(service);
-  $('#adminVisitsWrap').hidden=!needsVisits;form.elements.visits.required=needsVisits;if(!needsVisits)form.elements.visits.value=1;
+  const specific=supportsSpecific&&form.elements.dateMode.value==='specific';
+  $('#adminVisitsWrap').hidden=!needsVisits||specific;form.elements.visits.required=needsVisits&&!specific;if(!needsVisits)form.elements.visits.value=1;
   $('#adminAddressFields').hidden=!needsAddress;form.elements.street.required=needsAddress;form.elements.neighborhood.required=needsAddress;
   $('#adminAddressHint').textContent=service==='hospedagem'?'Hospedagem: não é necessário informar o endereço do tutor.':'';
   $('#adminDateModeWrap').hidden=!supportsSpecific;if(!supportsSpecific)form.elements.dateMode.value='range';
-  const specific=supportsSpecific&&form.elements.dateMode.value==='specific';
   $('#adminRangeDateFields').classList.toggle('hidden',specific);$('#adminSpecificDateFields').classList.toggle('hidden',!specific);
   form.elements.startDate.required=!specific;form.elements.endDate.required=!specific;
 }
@@ -54,12 +56,12 @@ function calculateAdminPrice(force=false){
   updateAdminServiceFields();
   const form=$('#bookingEditorForm'),service=form.elements.service.value,start=adminDate(form.elements.startDate.value),end=adminDate(form.elements.endDate.value),visits=Math.max(1,Number(form.elements.visits.value||1));
   const dogs=adminCount('dogCount'),cats=adminCount('catCount'),small=adminCount('birdCount')+adminCount('hamsterCount')+adminCount('guineaPigCount')+adminCount('fishCount')+adminCount('otherCount');
-  const specific=form.elements.dateMode.value==='specific'&&['pet_sitter','pet_sitter_passeio','passeio'].includes(service),days=specific?adminSpecificDates.length:adminInclusiveDays(start,end);let total=null,detail='Selecione serviço e datas.';
+  const specific=form.elements.dateMode.value==='specific'&&['pet_sitter','pet_sitter_passeio','passeio'].includes(service),days=specific?adminSpecificDates.length:adminInclusiveDays(start,end),totalVisits=specific?adminSpecificSchedule.reduce((sum,x)=>sum+Number(x.visits||1),0):days*visits;let total=null,detail='Selecione serviço e datas.';
   if(!specific&&start&&end&&end<start)detail='A data final precisa ser igual ou posterior à inicial.';
   else if(specific&&!adminSpecificDates.length)detail='Adicione pelo menos uma data.';
   else if(service&&days>0){
-    if(service==='pet_sitter'){total=days*visits*35;detail=days+' dia(s) × '+visits+' visita(s)/dia × R$ 35 — sem acréscimo por quantidade de animais'}
-    else if(service==='pet_sitter_passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{const rate=35+(15*dogs);total=days*visits*rate;detail=days+' dia(s) × '+visits+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))'}}
+    if(service==='pet_sitter'){total=totalVisits*35;detail=specific?totalVisits+' visita(s) distribuída(s) em '+days+' dia(s) × R$ 35':days+' dia(s) × '+visits+' visita(s)/dia × R$ 35 — sem acréscimo por quantidade de animais'}
+    else if(service==='pet_sitter_passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{const rate=35+(15*dogs);total=totalVisits*rate;detail=specific?totalVisits+' visita(s) em '+days+' dia(s) × (R$ 35 + R$ 15 × '+dogs+' cão(ães))':days+' dia(s) × '+visits+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))'}}
     else if(service==='passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{total=days*dogs*50;detail=days+' passeio(s) × '+dogs+' cão(ães) × R$ 50'}}
     else if(service==='hospedagem'){const d=adminStayDays(start,end),billable=dogs+cats,known=d*billable*65;if(small||!billable){detail=(billable?d+' diária(s) × '+billable+' cão/gato × R$ 65 = '+money.format(known)+'; ':'')+'demais animais: valor a validar'}else{total=known;detail=d+' diária(s) × '+billable+' cão/gato × R$ 65'}}
     else if(service==='vacinacao')detail='Valor definido após avaliação do protocolo e da vacina indicada.';
@@ -71,7 +73,7 @@ function calculateAdminPrice(force=false){
 }
 function openBookingEditor(id=''){
   const dialog=$('#bookingEditorDialog'),form=$('#bookingEditorForm'),msg=$('#bookingEditorMessage');
-  bookingEditorId=id;adminPriceManual=false;adminSpecificDates=[];form.reset();msg.className='form-message';msg.textContent='';
+  bookingEditorId=id;adminPriceManual=false;adminSpecificDates=[];adminSpecificSchedule=[];form.reset();msg.className='form-message';msg.textContent='';
   setBookingEditorField('source','whatsapp');setBookingEditorField('status','new');setBookingEditorField('service','pet_sitter');setBookingEditorField('dateMode','range');setBookingEditorField('visits','1');setBookingEditorField('startDate',today());setBookingEditorField('endDate',today());
   adminCountNames.forEach(name=>setBookingEditorField(name,0));setBookingEditorField('otherAnimals','');setBookingEditorField('petNames','');
   const editing=Boolean(id),b=editing?bookingsCache.find(x=>x.id===id):null;
@@ -80,7 +82,7 @@ function openBookingEditor(id=''){
   $('#bookingEditorStatusWrap').hidden=editing;
   $('#bookingEditorHint').textContent=editing?'Se este atendimento já estiver na agenda, o sistema tentará atualizar o evento. Pagamentos já lançados não são alterados automaticamente.':'Ao criar como Confirmada, o sistema tentará vinculá-la à agenda. Ao criar como Concluída com valor, o recebimento será registrado conforme a regra atual do financeiro.';
   if(b){
-    setBookingEditorField('source',b.source||'site');setBookingEditorField('service',b.service);setBookingEditorField('dateMode',b.dateMode||'range');adminSpecificDates=[...(b.specificDates||[])];setBookingEditorField('visits',b.visits||1);
+    setBookingEditorField('source',b.source||'site');setBookingEditorField('service',b.service);setBookingEditorField('dateMode',b.dateMode||'range');adminSpecificDates=[...(b.specificDates||[])];adminSpecificSchedule=(b.specificSchedule||adminSpecificDates.map(date=>({date,visits:b.visits||1}))).map(x=>({date:x.date,visits:Number(x.visits||1)}));setBookingEditorField('visits',b.visits||1);
     setBookingEditorField('startDate',String(b.startDate||'').slice(0,10));setBookingEditorField('endDate',String(b.endDate||'').slice(0,10));
     setBookingEditorField('tutorName',b.tutorName);setBookingEditorField('phone',b.phone);setBookingEditorField('street',b.service==='hospedagem'?'':b.street);setBookingEditorField('neighborhood',b.service==='hospedagem'?'':b.neighborhood);
     const parsed=parseAnimalSummary(b.animals,b.animalCount);Object.entries(parsed).forEach(([name,value])=>setBookingEditorField(name,value));
@@ -95,16 +97,17 @@ $('#addBookingBtn').addEventListener('click',()=>openBookingEditor());
 $('#closeBookingEditor').addEventListener('click',()=>$('#bookingEditorDialog').close());
 $('#cancelBookingEditor').addEventListener('click',()=>$('#bookingEditorDialog').close());
 $('#adminResetPrice').addEventListener('click',()=>calculateAdminPrice(true));
-$('#adminAddSpecificDate').addEventListener('click',()=>{const input=$('#adminSpecificDateInput'),v=input.value;if(!v)return;if(!adminSpecificDates.includes(v))adminSpecificDates.push(v);adminSpecificDates.sort();input.value='';renderAdminSpecificDates();calculateAdminPrice()});
-$('#adminSpecificDateList').addEventListener('click',e=>{const btn=e.target.closest('.admin-date-chip');if(!btn)return;adminSpecificDates=adminSpecificDates.filter(x=>x!==btn.dataset.date);renderAdminSpecificDates();calculateAdminPrice()});
-$('#bookingEditorForm [name="dateMode"]').addEventListener('change',()=>calculateAdminPrice());
+$('#adminAddSpecificDate').addEventListener('click',()=>{const input=$('#adminSpecificDateInput'),v=input.value;if(!v)return;if(!adminSpecificDates.includes(v)){adminSpecificDates.push(v);adminSpecificSchedule.push({date:v,visits:Math.max(1,Number($('#bookingEditorForm [name="visits"]').value||1))})}adminSpecificDates.sort();input.value='';renderAdminSpecificDates();calculateAdminPrice()});
+$('#adminSpecificDateList').addEventListener('click',e=>{const btn=e.target.closest('.admin-date-remove');if(!btn)return;adminSpecificDates=adminSpecificDates.filter(x=>x!==btn.dataset.date);adminSpecificSchedule=adminSpecificSchedule.filter(x=>x.date!==btn.dataset.date);renderAdminSpecificDates();calculateAdminPrice()});
+$('#adminSpecificDateList').addEventListener('input',e=>{if(!e.target.classList.contains('admin-specific-visit-input'))return;const item=adminSpecificSchedule.find(x=>x.date===e.target.dataset.date);if(item)item.visits=Math.max(1,Math.min(10,Number(e.target.value||1)));calculateAdminPrice()});
+$('#bookingEditorForm [name="dateMode"]').addEventListener('change',()=>{renderAdminSpecificDates();calculateAdminPrice()});
 $('#adminEstimatedTotal').addEventListener('input',()=>{adminPriceManual=true;$('#adminPriceDetail').textContent='Valor ajustado manualmente. Clique em “Usar valor automático” para recalcular.'});
-['service','visits','startDate','endDate',...adminCountNames].forEach(name=>$('#bookingEditorForm [name="'+name+'"]')?.addEventListener('input',()=>calculateAdminPrice()));
-$('#bookingEditorForm [name="service"]').addEventListener('change',()=>calculateAdminPrice());
+['visits','startDate','endDate',...adminCountNames].forEach(name=>$('#bookingEditorForm [name="'+name+'"]')?.addEventListener('input',()=>calculateAdminPrice()));
+$('#bookingEditorForm [name="service"]').addEventListener('change',()=>{renderAdminSpecificDates();calculateAdminPrice()});
 $('#bookingEditorForm').addEventListener('submit',async e=>{
   e.preventDefault();const form=e.currentTarget,btn=$('#saveBookingEditor'),msg=$('#bookingEditorMessage'),payload=fd(form);
   payload.visits=Number(payload.visits||1);adminCountNames.forEach(name=>payload[name]=Number(payload[name]||0));
-  const specific=payload.dateMode==='specific'&&['pet_sitter','pet_sitter_passeio','passeio'].includes(payload.service);payload.dateMode=specific?'specific':'range';payload.specificDates=specific?[...adminSpecificDates]:[];if(specific){if(!adminSpecificDates.length){msg.className='form-message error';msg.textContent='Adicione pelo menos uma data.';return}payload.startDate=adminSpecificDates[0];payload.endDate=adminSpecificDates[adminSpecificDates.length-1]}
+  const specific=payload.dateMode==='specific'&&['pet_sitter','pet_sitter_passeio','passeio'].includes(payload.service);payload.dateMode=specific?'specific':'range';payload.specificDates=specific?[...adminSpecificDates]:[];payload.specificSchedule=specific?adminSpecificSchedule.map(x=>({date:x.date,visits:Math.max(1,Math.min(10,Number(x.visits||1)))})):[];if(specific){if(!adminSpecificDates.length){msg.className='form-message error';msg.textContent='Adicione pelo menos uma data.';return}payload.startDate=adminSpecificDates[0];payload.endDate=adminSpecificDates[adminSpecificDates.length-1]}
   payload.estimatedTotal=payload.estimatedTotal===''?null:Number(payload.estimatedTotal);payload.autoPrice=!adminPriceManual;
   if(bookingEditorId)delete payload.status;
   btn.disabled=true;msg.className='form-message';msg.textContent='Salvando...';
@@ -117,7 +120,7 @@ $('#bookingEditorForm').addEventListener('submit',async e=>{
     await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);
   }catch(err){msg.className='form-message error';msg.textContent=err.message}finally{btn.disabled=false}
 });
-$('#bookingEditorDialog').addEventListener('close',()=>{bookingEditorId='';adminPriceManual=false;adminSpecificDates=[];$('#bookingEditorMessage').textContent='';});
+$('#bookingEditorDialog').addEventListener('close',()=>{bookingEditorId='';adminPriceManual=false;adminSpecificDates=[];adminSpecificSchedule=[];$('#bookingEditorMessage').textContent='';});
 
 let bookingToDelete='';
 function openDeleteDialog(id){const booking=bookingsCache.find(b=>b.id===id);bookingToDelete=id;$('#deleteBookingText').textContent=`O registro de ${booking?.tutorName||'este tutor'} será removido permanentemente${booking?.calendarLinked?' e o evento correspondente será excluído da agenda.':'.'}`;$('#deleteBookingDialog').showModal()}
