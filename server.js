@@ -48,17 +48,26 @@ const d = v => new Date(String(v)+'T12:00:00-03:00');
 const daysInclusive = (a,b) => Math.max(0,Math.floor((d(b)-d(a))/86400000)+1);
 const stayDays = (a,b) => Math.max(1,Math.ceil((d(b)-d(a))/86400000));
 function normalizeSpecificDates(values=[]){return [...new Set((Array.isArray(values)?values:[]).map(v=>String(v).slice(0,10)).filter(v=>/^\d{4}-\d{2}-\d{2}$/.test(v)))].sort()}
+function normalizeSpecificSchedule(values=[],fallbackDates=[],defaultVisits=1){
+  const map=new Map();
+  for(const item of Array.isArray(values)?values:[]){const date=String(item?.date||'').slice(0,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(date))continue;map.set(date,{date,visits:Math.max(1,Math.min(10,Number(item?.visits||defaultVisits||1)))})}
+  for(const date of normalizeSpecificDates(fallbackDates)){if(!map.has(date))map.set(date,{date,visits:Math.max(1,Math.min(10,Number(defaultVisits||1)))})}
+  return [...map.values()].sort((a,b)=>a.date.localeCompare(b.date));
+}
 function bookingDateLabel(b){const dates=normalizeSpecificDates(b.specificDates||b.specific_dates||[]);return (b.dateMode||b.date_mode)==='specific'&&dates.length?'Dias: '+dates.map(dateBr).join(', '):'Período: '+dateBr(b.startDate||b.start_date)+' a '+dateBr(b.endDate||b.end_date)}
-function resolveBookingDates(p){const specific=normalizeSpecificDates(p.specificDates);if(p.dateMode==='specific'&&specific.length){return{dateMode:'specific',specificDates:specific,startDate:specific[0],endDate:specific[specific.length-1]}}return{dateMode:'range',specificDates:[],startDate:p.startDate,endDate:p.endDate}}
+function bookingVisitLabel(b){if(!['pet_sitter','pet_sitter_passeio'].includes(b.service))return null;const schedule=normalizeSpecificSchedule(b.specificSchedule||b.specific_schedule||[],b.specificDates||b.specific_dates||[],b.visits);return (b.dateMode||b.date_mode)==='specific'&&schedule.length?'Visitas: '+schedule.map(x=>dateBr(x.date)+': '+x.visits).join(' • '):'Visitas por dia: '+b.visits}
+function resolveBookingDates(p){const schedule=normalizeSpecificSchedule(p.specificSchedule,p.specificDates,p.visits),specific=normalizeSpecificDates(schedule.map(x=>x.date));if(p.dateMode==='specific'&&specific.length){return{dateMode:'specific',specificDates:specific,specificSchedule:schedule,startDate:specific[0],endDate:specific[specific.length-1]}}return{dateMode:'range',specificDates:[],specificSchedule:[],startDate:p.startDate,endDate:p.endDate}}
 
 function calc(service,start,end,visits,counts={}){
   const n = Math.max(1,Math.min(10,Number(visits||1)));
   const dogs=Math.max(0,Number(counts.dogCount||0)),cats=Math.max(0,Number(counts.catCount||0));
   const smallPets=['birdCount','hamsterCount','guineaPigCount','fishCount','otherCount'].reduce((sum,key)=>sum+Math.max(0,Number(counts[key]||0)),0);
-  const specific=normalizeSpecificDates(counts.specificDates||[]);const days = counts.dateMode==='specific'&&specific.length?specific.length:daysInclusive(start,end);
+  const specific=normalizeSpecificDates(counts.specificDates||[]),schedule=normalizeSpecificSchedule(counts.specificSchedule||[],specific,n);
+  const isSpecific=counts.dateMode==='specific'&&specific.length,days=isSpecific?specific.length:daysInclusive(start,end);
+  const totalVisits=isSpecific&&schedule.length?schedule.reduce((sum,x)=>sum+x.visits,0):days*n;
   if (!days) throw new Error('Período inválido.');
-  if (service==='pet_sitter') return { total:days*n*35, detail:days+' dia(s) × '+n+' visita(s)/dia × R$ 35 (sem acréscimo por quantidade de animais)' };
-  if (service==='pet_sitter_passeio') { const rate=35+(15*dogs);return { total:days*n*rate, detail:days+' dia(s) × '+n+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))' }; }
+  if (service==='pet_sitter') return { total:totalVisits*35, detail:isSpecific?totalVisits+' visita(s) distribuída(s) em '+days+' dia(s) × R$ 35':days+' dia(s) × '+n+' visita(s)/dia × R$ 35 (sem acréscimo por quantidade de animais)' };
+  if (service==='pet_sitter_passeio') { const rate=35+(15*dogs);return { total:totalVisits*rate, detail:isSpecific?totalVisits+' visita(s) em '+days+' dia(s) × (R$ 35 + R$ 15 × '+dogs+' cão(ães))':days+' dia(s) × '+n+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))' }; }
   if (service==='passeio') return { total:days*dogs*50, detail:days+' passeio(s) × '+dogs+' cão(ães) × R$ 50' };
   if (service==='hospedagem') {
     const q=stayDays(start,end),billable=dogs+cats,known=q*billable*65;
@@ -76,6 +85,7 @@ async function initDb(){
   await pool.query('ALTER TABLE cps_bookings ADD COLUMN IF NOT EXISTS email_sent BOOLEAN NOT NULL DEFAULT FALSE');
   await pool.query("ALTER TABLE cps_bookings ADD COLUMN IF NOT EXISTS date_mode VARCHAR(20) NOT NULL DEFAULT 'range'");
   await pool.query("ALTER TABLE cps_bookings ADD COLUMN IF NOT EXISTS specific_dates JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE cps_bookings ADD COLUMN IF NOT EXISTS specific_schedule JSONB NOT NULL DEFAULT '[]'::jsonb");
   await pool.query("ALTER TABLE cps_bookings ALTER COLUMN calendar_event_id TYPE TEXT");
   await pool.query('CREATE INDEX IF NOT EXISTS cps_bookings_dates_idx ON cps_bookings(start_date,end_date); CREATE INDEX IF NOT EXISTS cps_bookings_status_idx ON cps_bookings(status); CREATE INDEX IF NOT EXISTS cps_bookings_phone_idx ON cps_bookings(phone)');
   await pool.query('CREATE TABLE IF NOT EXISTS cps_payments(id UUID PRIMARY KEY,booking_id UUID REFERENCES cps_bookings(id) ON DELETE SET NULL,amount NUMERIC(12,2) NOT NULL CHECK(amount>=0),method VARCHAR(40) NOT NULL DEFAULT \'pix\',paid_at DATE NOT NULL DEFAULT CURRENT_DATE,note VARCHAR(300),created_by BIGINT REFERENCES cps_users(id) ON DELETE SET NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())');
@@ -88,10 +98,10 @@ async function seed(email,password,name){ if(!email||!password)return; const e=e
 
 function bookingMsg(b){
   const tutorChat='https://wa.me/'+waPhone(b.phone);
-  return ['🐾 Nova pré-solicitação — Casal Pet Sitter','Código: '+b.id,'Serviço: '+SERVICE[b.service],bookingDateLabel(b),['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,'Tutor: '+b.tutorName,'Telefone: '+b.phone,'Falar com o tutor: '+tutorChat,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Cálculo: '+b.priceDetail,'Status: aguardando confirmação de disponibilidade.'].filter(Boolean).join('\n');
+  return ['🐾 Nova pré-solicitação — Casal Pet Sitter','Código: '+b.id,'Serviço: '+SERVICE[b.service],bookingDateLabel(b),bookingVisitLabel(b),'Tutor: '+b.tutorName,'Telefone: '+b.phone,'Falar com o tutor: '+tutorChat,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Cálculo: '+b.priceDetail,'Status: aguardando confirmação de disponibilidade.'].filter(Boolean).join('\n');
 }
 function customerBookingMsg(b){
-  return ['Olá! 🐾 Fiz uma pré-reserva pelo site do Casal Pet Sitter.','Código: '+b.id.slice(0,8),'Nome: '+b.tutorName,'Serviço: '+SERVICE[b.service],'Período: '+dateBr(b.startDate)+' a '+dateBr(b.endDate),['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,'Telefone informado: '+b.phone,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Gostaria de confirmar a disponibilidade.'].filter(Boolean).join('\n');
+  return ['Olá! 🐾 Fiz uma pré-reserva pelo site do Casal Pet Sitter.','Código: '+b.id.slice(0,8),'Nome: '+b.tutorName,'Serviço: '+SERVICE[b.service],'Período: '+dateBr(b.startDate)+' a '+dateBr(b.endDate),bookingVisitLabel(b),'Telefone informado: '+b.phone,'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG','Animais: '+b.animalCount+' ('+b.animals+')','Observações: '+(b.notes||'Não informado'),'Estimativa: '+(b.estimatedTotal==null?'A confirmar':money(b.estimatedTotal)),'Gostaria de confirmar a disponibilidade.'].filter(Boolean).join('\n');
 }
 
 async function deliverEmail({subject,text:plainText,html}){
@@ -152,10 +162,10 @@ async function createSingleCalendar(b){
 }
 
 async function createCalendar(b){
-  const dates=normalizeSpecificDates(b.specificDates||[]);
+  const dates=normalizeSpecificDates(b.specificDates||[]),schedule=normalizeSpecificSchedule(b.specificSchedule||[],dates,b.visits);
   if((b.dateMode||'range')!=='specific'||!dates.length)return createSingleCalendar(b);
   const ids=[];
-  for(const day of dates){const id=await createSingleCalendar({...b,startDate:day,endDate:day,dateMode:'range',specificDates:[]});if(id)ids.push(id)}
+  for(const day of dates){const item=schedule.find(x=>x.date===day);const id=await createSingleCalendar({...b,startDate:day,endDate:day,visits:item?.visits||b.visits,dateMode:'range',specificDates:[],specificSchedule:[]});if(id)ids.push(id)}
   return ids.length?JSON.stringify(ids):null;
 }
 
@@ -181,11 +191,12 @@ async function deleteCalendarEvent(stored){
   for(const id of ids){const ok=await deleteSingleCalendarEvent(id);if(!ok)return false}return true;
 }
 
-const bookingSchema=z.object({service:z.enum(['pet_sitter','pet_sitter_passeio','passeio','hospedagem','vacinacao']),dateMode:z.enum(['range','specific']).optional().default('range'),specificDates:z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(60).optional().default([]),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10).default(1),tutorName:z.string().trim().min(2).max(140),phone:z.string().trim().min(8).max(40),street:z.string().trim().min(3).max(220),neighborhood:z.string().trim().min(2).max(140),dogCount:z.coerce.number().int().min(0).max(30).default(0),catCount:z.coerce.number().int().min(0).max(30).default(0),birdCount:z.coerce.number().int().min(0).max(30).default(0),hamsterCount:z.coerce.number().int().min(0).max(30).default(0),guineaPigCount:z.coerce.number().int().min(0).max(30).default(0),fishCount:z.coerce.number().int().min(0).max(100).default(0),otherCount:z.coerce.number().int().min(0).max(30).default(0),petNames:z.string().trim().max(180).optional().default(''),otherAnimals:z.string().trim().max(120).optional().default(''),animalCount:z.coerce.number().int().min(1).max(100).optional(),animals:z.string().trim().max(300).optional(),notes:z.string().trim().max(1200).optional().default('')});
+const bookingSchema=z.object({service:z.enum(['pet_sitter','pet_sitter_passeio','passeio','hospedagem','vacinacao']),dateMode:z.enum(['range','specific']).optional().default('range'),specificDates:z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(60).optional().default([]),specificSchedule:z.array(z.object({date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10)})).max(60).optional().default([]),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10).default(1),tutorName:z.string().trim().min(2).max(140),phone:z.string().trim().min(8).max(40),street:z.string().trim().min(3).max(220),neighborhood:z.string().trim().min(2).max(140),dogCount:z.coerce.number().int().min(0).max(30).default(0),catCount:z.coerce.number().int().min(0).max(30).default(0),birdCount:z.coerce.number().int().min(0).max(30).default(0),hamsterCount:z.coerce.number().int().min(0).max(30).default(0),guineaPigCount:z.coerce.number().int().min(0).max(30).default(0),fishCount:z.coerce.number().int().min(0).max(100).default(0),otherCount:z.coerce.number().int().min(0).max(30).default(0),petNames:z.string().trim().max(180).optional().default(''),otherAnimals:z.string().trim().max(120).optional().default(''),animalCount:z.coerce.number().int().min(1).max(100).optional(),animals:z.string().trim().max(300).optional(),notes:z.string().trim().max(1200).optional().default('')});
 const adminBookingSchema=z.object({
   service:z.enum(['pet_sitter','pet_sitter_passeio','passeio','hospedagem','vacinacao']),
   dateMode:z.enum(['range','specific']).optional().default('range'),
   specificDates:z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(60).optional().default([]),
+  specificSchedule:z.array(z.object({date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),visits:z.coerce.number().int().min(1).max(10)})).max(60).optional().default([]),
   startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   visits:z.coerce.number().int().min(1).max(10).default(1),
@@ -224,11 +235,11 @@ function needAuth(req,res,next){ if(!req.session.userId)return res.status(401).j
 function csrf(req){ if(!req.session.csrfToken)req.session.csrfToken=crypto.randomBytes(24).toString('hex'); return req.session.csrfToken; }
 function needCsrf(req,res,next){ if(!req.get('x-csrf-token')||req.get('x-csrf-token')!==req.session.csrfToken)return res.status(403).json({error:'Sessão expirada. Atualize a página.'}); next(); }
 async function audit(req,action,type,id,metadata={}){ if(!DB)return; try{await pool.query('INSERT INTO cps_audit_log(user_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,$4,$5)',[req.session.userId||null,action,type,id?String(id):null,metadata]);}catch(e){console.error('audit',e.message);} }
-function mapBooking(r){ const sourceLabels={site:'Site',whatsapp:'WhatsApp',instagram:'Instagram',telefone:'Telefone',presencial:'Presencial',outro:'Outro'};const specific=normalizeSpecificDates(r.specific_dates||[]);return {id:r.id,service:r.service,serviceLabel:SERVICE[r.service]||r.service,dateMode:r.date_mode||'range',specificDates:specific,startDate:r.start_date,endDate:r.end_date,visits:r.visits,tutorName:r.tutor_name,phone:r.phone,street:r.street,neighborhood:r.neighborhood,animalCount:r.animal_count,animals:r.animals,notes:r.notes,estimatedTotal:r.estimated_total==null?null:Number(r.estimated_total),priceDetail:r.price_detail,status:r.status,statusLabel:STATUS[r.status]||r.status,source:r.source||'site',sourceLabel:sourceLabels[r.source]||r.source||'Site',whatsappSent:r.whatsapp_sent,calendarLinked:Boolean(r.calendar_event_id),createdAt:r.created_at}; }
+function mapBooking(r){ const sourceLabels={site:'Site',whatsapp:'WhatsApp',instagram:'Instagram',telefone:'Telefone',presencial:'Presencial',outro:'Outro'};const specific=normalizeSpecificDates(r.specific_dates||[]),schedule=normalizeSpecificSchedule(r.specific_schedule||[],specific,r.visits);return {id:r.id,service:r.service,serviceLabel:SERVICE[r.service]||r.service,dateMode:r.date_mode||'range',specificDates:specific,specificSchedule:schedule,startDate:r.start_date,endDate:r.end_date,visits:r.visits,tutorName:r.tutor_name,phone:r.phone,street:r.street,neighborhood:r.neighborhood,animalCount:r.animal_count,animals:r.animals,notes:r.notes,estimatedTotal:r.estimated_total==null?null:Number(r.estimated_total),priceDetail:r.price_detail,status:r.status,statusLabel:STATUS[r.status]||r.status,source:r.source||'site',sourceLabel:sourceLabels[r.source]||r.source||'Site',whatsappSent:r.whatsapp_sent,calendarLinked:Boolean(r.calendar_event_id),createdAt:r.created_at}; }
 
 app.get('/api/health',async(_req,res)=>{let db=false;if(DB){try{await pool.query('SELECT 1');db=true}catch{}}res.json({ok:true,db,version:'2.1.0'})});
 app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{
-  const parsed=bookingSchema.parse(req.body),resolved=resolveBookingDates(parsed),animalInfo=normalizeAnimals(parsed),p={...parsed,...resolved,animalCount:animalInfo.total,animals:animalInfo.summary};if(['hospedagem','vacinacao'].includes(p.service)){p.dateMode='range';p.specificDates=[]}
+  const parsed=bookingSchema.parse(req.body),resolved=resolveBookingDates(parsed),animalInfo=normalizeAnimals(parsed),p={...parsed,...resolved,animalCount:animalInfo.total,animals:animalInfo.summary};if(['hospedagem','vacinacao'].includes(p.service)){p.dateMode='range';p.specificDates=[];p.specificSchedule=[]}
   if(p.animalCount<1)return res.status(400).json({error:'Informe pelo menos um animal.'});
   if(['passeio','pet_sitter_passeio'].includes(p.service)&&p.dogCount<1)return res.status(400).json({error:'Para passeio, informe pelo menos um cão.'});
   const today=new Date();today.setHours(0,0,0,0);
@@ -236,7 +247,7 @@ app.post('/api/bookings',bookingLimiter,needDb,async(req,res)=>{try{
   const requestId=z.string().uuid().optional().parse(req.body.requestId);
   if(requestId){const existing=await pool.query('SELECT * FROM cps_bookings WHERE id=$1',[requestId]);if(existing.rowCount){const saved=mapBooking(existing.rows[0]);if(saved.phone!==p.phone||saved.tutorName!==p.tutorName||saved.service!==p.service||saved.startDate!==p.startDate||saved.endDate!==p.endDate)return res.status(409).json({error:'A solicitação anterior já foi registrada. Atualize a página para enviar outra.'});return res.json({ok:true,id:saved.id,total:saved.estimatedTotal,priceDetail:saved.priceDetail,customerWhatsAppUrl:'https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(saved))})}}
   const price=calc(p.service,p.startDate,p.endDate,p.visits,p),id=requestId||crypto.randomUUID(),b={...p,id,estimatedTotal:price.total,priceDetail:price.detail};
-  await pool.query('INSERT INTO cps_bookings(id,service,date_mode,specific_dates,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (id) DO NOTHING',[id,p.service,p.dateMode,JSON.stringify(p.specificDates),p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);
+  await pool.query('INSERT INTO cps_bookings(id,service,date_mode,specific_dates,specific_schedule,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING',[id,p.service,p.dateMode,JSON.stringify(p.specificDates),JSON.stringify(p.specificSchedule),p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,price.total,price.detail]);
   const customerWhatsAppUrl='https://wa.me/'+WIFE_WHATSAPP+'?text='+encodeURIComponent(customerBookingMsg(b));
   res.status(201).json({ok:true,id,total:price.total,priceDetail:price.detail,customerWhatsAppUrl});
   sendBookingEmail(b).then(sent=>pool.query('UPDATE cps_bookings SET email_sent=$1 WHERE id=$2',[sent,id])).catch(e=>console.error('Email:',e.message));
@@ -344,7 +355,7 @@ app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
   const priceDetail=p.autoPrice?automatic.detail:(estimatedTotal==null?'Valor a confirmar — registro administrativo':'Valor ajustado manualmente no administrativo');
   const id=crypto.randomUUID();
   let calendarEventId=null,paymentCreated=false;
-  await pool.query('INSERT INTO cps_bookings(id,service,date_mode,specific_dates,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail,status,source) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)',[id,p.service,p.dateMode,JSON.stringify(p.specificDates),p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,estimatedTotal,priceDetail,p.status,p.source]);
+  await pool.query('INSERT INTO cps_bookings(id,service,date_mode,specific_dates,specific_schedule,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail,status,source) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)',[id,p.service,p.dateMode,JSON.stringify(p.specificDates),JSON.stringify(p.specificSchedule),p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,estimatedTotal,priceDetail,p.status,p.source]);
   let row=(await pool.query('SELECT * FROM cps_bookings WHERE id=$1',[id])).rows[0];
   if(['confirmed','completed'].includes(p.status)){
     try{
@@ -365,7 +376,7 @@ app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
 
 app.put('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{try{
   if(!z.string().uuid().safeParse(req.params.id).success)return res.status(400).json({error:'Atendimento inválido.'});
-  const parsed=adminBookingSchema.omit({status:true}).parse(req.body),animalInfo=normalizeAnimals(parsed),p={...parsed,animalCount:animalInfo.total,animals:animalInfo.summary};
+  const parsed=adminBookingSchema.omit({status:true}).parse(req.body),resolved=resolveBookingDates(parsed),animalInfo=normalizeAnimals(parsed),p={...parsed,...resolved,animalCount:animalInfo.total,animals:animalInfo.summary};if(['hospedagem','vacinacao'].includes(p.service)){p.dateMode='range';p.specificDates=[];p.specificSchedule=[]}
   if(d(p.endDate)<d(p.startDate))return res.status(400).json({error:'A data final deve ser igual ou posterior à inicial.'});
   if(p.animalCount<1)return res.status(400).json({error:'Informe pelo menos um animal.'});
   if(['passeio','pet_sitter_passeio'].includes(p.service)&&p.dogCount<1)return res.status(400).json({error:'Para passeio, informe pelo menos um cão.'});
@@ -381,7 +392,7 @@ app.put('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{try{
   if(previous.calendar_event_id){
     try{const removed=await deleteCalendarEvent(previous.calendar_event_id);if(!removed)return res.status(502).json({error:'Não foi possível atualizar porque a integração com a agenda não está disponível no momento.'})}catch(e){console.error('Edit booking calendar delete:',e.message);return res.status(502).json({error:'Não foi possível atualizar porque o evento atual da agenda não pôde ser removido. Verifique a integração e tente novamente.'})}
   }
-  let row=(await pool.query('UPDATE cps_bookings SET service=$1,date_mode=$2,specific_dates=$3::jsonb,start_date=$4,end_date=$5,visits=$6,tutor_name=$7,phone=$8,street=$9,neighborhood=$10,animal_count=$11,animals=$12,notes=$13,estimated_total=$14,price_detail=$15,source=$16,calendar_event_id=NULL,updated_at=NOW() WHERE id=$17 RETURNING *',[p.service,p.dateMode,JSON.stringify(p.specificDates),p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,estimatedTotal,priceDetail,p.source,req.params.id])).rows[0];
+  let row=(await pool.query('UPDATE cps_bookings SET service=$1,date_mode=$2,specific_dates=$3::jsonb,specific_schedule=$4::jsonb,start_date=$5,end_date=$6,visits=$7,tutor_name=$8,phone=$9,street=$10,neighborhood=$11,animal_count=$12,animals=$13,notes=$14,estimated_total=$15,price_detail=$16,source=$17,calendar_event_id=NULL,updated_at=NOW() WHERE id=$18 RETURNING *',[p.service,p.dateMode,JSON.stringify(p.specificDates),JSON.stringify(p.specificSchedule),p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,estimatedTotal,priceDetail,p.source,req.params.id])).rows[0];
   let calendarLinked=false;
   if(['confirmed','completed'].includes(row.status)){
     try{
@@ -522,7 +533,7 @@ app.get('/calendar/:token.ics',needDb,async(req,res)=>{try{
       'Telefone: '+b.phone,
       'Endereço: '+b.street+' — '+b.neighborhood+', Viçosa/MG',
       'Animais: '+b.animal_count+' ('+b.animals+')',
-      ['pet_sitter','pet_sitter_passeio'].includes(b.service)?'Visitas por dia: '+b.visits:null,
+      ['pet_sitter','pet_sitter_passeio'].includes(b.service)?bookingVisitLabel({service:b.service,dateMode:b.date_mode,specificDates:b.specific_dates,specificSchedule:b.specific_schedule,visits:b.visits}):null,
       'Valor estimado: '+(b.estimated_total==null?'A confirmar':money(b.estimated_total)),
       b.notes?'Observações: '+b.notes:null
     ].filter(Boolean).join('\n');
