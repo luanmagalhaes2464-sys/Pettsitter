@@ -59,3 +59,10 @@ body{overflow-x:hidden}.topbar{box-shadow:0 8px 28px rgba(75,51,31,.04)}
   .dialog-editor-head{gap:10px}
   .admin-page .admin-heading{flex-wrap:wrap}
 }
+
+.admin-pet-count-grid{margin:8px 0 14px}
+.admin-price-box{display:grid;grid-template-columns:1fr minmax(250px,320px);gap:18px;align-items:end;margin:8px 0 16px;padding:16px;border:1px solid var(--admin-border);border-radius:12px;background:#faf8f4}
+.admin-price-box strong,.admin-price-box small{display:block}.admin-price-box small{margin-top:5px;color:var(--muted);line-height:1.45}
+.admin-price-actions{display:grid;gap:8px}.admin-price-actions label{margin:0}.admin-price-actions .btn{justify-self:start}
+.booking-editor-dialog [hidden]{display:none!important}
+@media(max-width:760px){.admin-price-box{grid-template-columns:1fr}.admin-pet-count-grid{grid-template-columns:repeat(2,1fr)}}
