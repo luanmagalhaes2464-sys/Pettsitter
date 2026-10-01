@@ -82,3 +82,17 @@ body{overflow-x:hidden}.topbar{box-shadow:0 8px 28px rgba(75,51,31,.04)}
 .date-schedule-row input{padding:7px 8px!important}
 .date-remove{border:0;background:transparent;color:#9a4944;font-size:18px;cursor:pointer;line-height:1;padding:5px}
 @media(max-width:520px){.date-schedule-row{grid-template-columns:1fr auto}.date-schedule-row label{grid-column:1/2;grid-row:2}.date-remove{grid-column:2;grid-row:1/3}}
+
+/* Dashboard financeiro mais claro */
+.admin-page .metrics-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
+.admin-page .metrics-grid article small{display:block;margin-top:5px;color:var(--admin-muted);font-size:10px;line-height:1.35}
+.month-group{display:grid;gap:8px;padding:13px 0;border-bottom:1px solid var(--admin-border)}
+.month-group:last-child{border-bottom:0}
+.month-title{font-size:12px;font-weight:800;color:var(--admin-text);margin-bottom:2px}
+.month-series{display:grid;grid-template-columns:74px 1fr 96px;gap:10px;align-items:center}
+.month-series>span{font-size:11px;color:var(--admin-muted)}
+.month-series>strong{font-size:11px;text-align:right;color:var(--admin-text)}
+.bar-track{height:9px;border-radius:999px;background:#eef0ed;overflow:hidden}
+.bar.receivable{background:#b08a58}
+@media(max-width:1020px){.admin-page .metrics-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.admin-page .metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.month-series{grid-template-columns:70px 1fr 84px}}
