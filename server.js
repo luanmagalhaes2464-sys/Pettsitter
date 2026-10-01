@@ -354,11 +354,11 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
   const upcomingSql=`
     SELECT * FROM cps_bookings b
     WHERE b.status='confirmed' AND b.end_date >= CURRENT_DATE
-      AND ($3::text IS NULL OR b.service=$3::text)
+      AND ($1::text IS NULL OR b.service=$1::text)
     ORDER BY b.start_date ASC,b.created_at ASC
     LIMIT 8`;
   const [s,m,bc,rv,r,u]=await Promise.all([
-    pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args),pool.query(upcomingSql,args)
+    pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args),pool.query(upcomingSql,[service])
   ]);
   const x=s.rows[0], counts=new Map(bc.rows.map(v=>[v.service,Number(v.bookings)])), revenues=new Map(rv.rows.map(v=>[v.service,Number(v.received)]));
   const keys=new Set([...counts.keys(),...revenues.keys()]);
