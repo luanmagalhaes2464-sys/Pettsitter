@@ -171,12 +171,22 @@ const adminBookingSchema=z.object({
   visits:z.coerce.number().int().min(1).max(10).default(1),
   tutorName:z.string().trim().min(2).max(140),
   phone:z.string().trim().min(8).max(40),
-  street:z.string().trim().min(2).max(220),
-  neighborhood:z.string().trim().min(2).max(140),
-  animalCount:z.coerce.number().int().min(1).max(100),
-  animals:z.string().trim().min(2).max(300),
+  street:z.string().trim().max(220).optional().default(''),
+  neighborhood:z.string().trim().max(140).optional().default(''),
+  dogCount:z.coerce.number().int().min(0).max(30).default(0),
+  catCount:z.coerce.number().int().min(0).max(30).default(0),
+  birdCount:z.coerce.number().int().min(0).max(30).default(0),
+  hamsterCount:z.coerce.number().int().min(0).max(30).default(0),
+  guineaPigCount:z.coerce.number().int().min(0).max(30).default(0),
+  fishCount:z.coerce.number().int().min(0).max(100).default(0),
+  otherCount:z.coerce.number().int().min(0).max(30).default(0),
+  petNames:z.string().trim().max(180).optional().default(''),
+  otherAnimals:z.string().trim().max(120).optional().default(''),
+  animalCount:z.coerce.number().int().min(1).max(100).optional(),
+  animals:z.string().trim().max(300).optional(),
   notes:z.string().trim().max(1200).optional().default(''),
   estimatedTotal:z.preprocess(v=>v===''||v==null?null:v,z.coerce.number().min(0).max(100000).nullable()),
+  autoPrice:z.boolean().optional().default(true),
   source:z.enum(['site','whatsapp','instagram','telefone','presencial','outro']).default('whatsapp'),
   status:z.enum(['new','analyzing','confirmed','completed','cancelled']).optional().default('new')
 });
@@ -302,11 +312,19 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
   res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),net:Number(x.received)-Number(x.expenses),contracted:Number(x.contracted),bookings:Number(x.bookings),clients:Number(x.clients)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
 app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
-  const p=adminBookingSchema.parse(req.body);
+  const parsed=adminBookingSchema.parse(req.body),animalInfo=normalizeAnimals(parsed),p={...parsed,animalCount:animalInfo.total,animals:animalInfo.summary};
   if(d(p.endDate)<d(p.startDate))return res.status(400).json({error:'A data final deve ser igual ou posterior à inicial.'});
-  const id=crypto.randomUUID(),priceDetail=p.estimatedTotal==null?'Valor a confirmar — registro administrativo':'Valor informado no registro administrativo';
+  if(p.animalCount<1)return res.status(400).json({error:'Informe pelo menos um animal.'});
+  if(['passeio','pet_sitter_passeio'].includes(p.service)&&p.dogCount<1)return res.status(400).json({error:'Para passeio, informe pelo menos um cão.'});
+  if(p.service!=='hospedagem'&&(!p.street||!p.neighborhood))return res.status(400).json({error:'Informe rua e bairro para este serviço.'});
+  if(p.service==='hospedagem'){p.street='Hospedagem no Casal Pet Sitter';p.neighborhood='Viçosa'}
+  if(!['pet_sitter','pet_sitter_passeio'].includes(p.service))p.visits=1;
+  const automatic=calc(p.service,p.startDate,p.endDate,p.visits,p);
+  const estimatedTotal=p.autoPrice?automatic.total:p.estimatedTotal;
+  const priceDetail=p.autoPrice?automatic.detail:(estimatedTotal==null?'Valor a confirmar — registro administrativo':'Valor ajustado manualmente no administrativo');
+  const id=crypto.randomUUID();
   let calendarEventId=null,paymentCreated=false;
-  await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail,status,source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,p.estimatedTotal,priceDetail,p.status,p.source]);
+  await pool.query('INSERT INTO cps_bookings(id,service,start_date,end_date,visits,tutor_name,phone,street,neighborhood,animal_count,animals,notes,estimated_total,price_detail,status,source) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)',[id,p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,estimatedTotal,priceDetail,p.status,p.source]);
   let row=(await pool.query('SELECT * FROM cps_bookings WHERE id=$1',[id])).rows[0];
   if(['confirmed','completed'].includes(p.status)){
     try{
@@ -315,10 +333,10 @@ app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
       if(calendarEventId){row=(await pool.query('UPDATE cps_bookings SET calendar_event_id=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[calendarEventId,id])).rows[0]}
     }catch(e){console.error('Manual booking calendar:',e.message)}
   }
-  if(p.status==='completed'&&p.estimatedTotal!=null&&Number(p.estimatedTotal)>0){
-    await pool.query("INSERT INTO cps_payments(id,booking_id,amount,method,note,created_by) VALUES($1,$2,$3,'pix','Recebimento via Pix registrado ao criar atendimento concluído',$4)",[crypto.randomUUID(),id,p.estimatedTotal,req.session.userId]);paymentCreated=true;
+  if(p.status==='completed'&&estimatedTotal!=null&&Number(estimatedTotal)>0){
+    await pool.query("INSERT INTO cps_payments(id,booking_id,amount,method,note,created_by) VALUES($1,$2,$3,'pix','Recebimento via Pix registrado ao criar atendimento concluído',$4)",[crypto.randomUUID(),id,estimatedTotal,req.session.userId]);paymentCreated=true;
   }
-  await audit(req,'create_manual_booking','booking',id,{source:p.source,status:p.status,paymentCreated,calendarLinked:Boolean(calendarEventId)});
+  await audit(req,'create_manual_booking','booking',id,{source:p.source,status:p.status,autoPrice:p.autoPrice,paymentCreated,calendarLinked:Boolean(calendarEventId)});
   res.status(201).json({booking:mapBooking(row),paymentCreated,calendarLinked:Boolean(calendarEventId)});
 }catch(e){
   if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados do atendimento.'});
@@ -327,16 +345,23 @@ app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
 
 app.put('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{try{
   if(!z.string().uuid().safeParse(req.params.id).success)return res.status(400).json({error:'Atendimento inválido.'});
-  const p=adminBookingSchema.omit({status:true}).parse(req.body);
+  const parsed=adminBookingSchema.omit({status:true}).parse(req.body),animalInfo=normalizeAnimals(parsed),p={...parsed,animalCount:animalInfo.total,animals:animalInfo.summary};
   if(d(p.endDate)<d(p.startDate))return res.status(400).json({error:'A data final deve ser igual ou posterior à inicial.'});
+  if(p.animalCount<1)return res.status(400).json({error:'Informe pelo menos um animal.'});
+  if(['passeio','pet_sitter_passeio'].includes(p.service)&&p.dogCount<1)return res.status(400).json({error:'Para passeio, informe pelo menos um cão.'});
+  if(p.service!=='hospedagem'&&(!p.street||!p.neighborhood))return res.status(400).json({error:'Informe rua e bairro para este serviço.'});
+  if(p.service==='hospedagem'){p.street='Hospedagem no Casal Pet Sitter';p.neighborhood='Viçosa'}
+  if(!['pet_sitter','pet_sitter_passeio'].includes(p.service))p.visits=1;
+  const automatic=calc(p.service,p.startDate,p.endDate,p.visits,p);
+  const estimatedTotal=p.autoPrice?automatic.total:p.estimatedTotal;
+  const priceDetail=p.autoPrice?automatic.detail:(estimatedTotal==null?'Valor a confirmar — editado no administrativo':'Valor ajustado manualmente no administrativo');
   const found=await pool.query('SELECT * FROM cps_bookings WHERE id=$1',[req.params.id]);
   if(!found.rowCount)return res.status(404).json({error:'Atendimento não encontrado.'});
   const previous=found.rows[0];
   if(previous.calendar_event_id){
     try{const removed=await deleteCalendarEvent(previous.calendar_event_id);if(!removed)return res.status(502).json({error:'Não foi possível atualizar porque a integração com a agenda não está disponível no momento.'})}catch(e){console.error('Edit booking calendar delete:',e.message);return res.status(502).json({error:'Não foi possível atualizar porque o evento atual da agenda não pôde ser removido. Verifique a integração e tente novamente.'})}
   }
-  const priceDetail=p.estimatedTotal==null?'Valor a confirmar — editado no administrativo':'Valor informado/ajustado no administrativo';
-  let row=(await pool.query('UPDATE cps_bookings SET service=$1,start_date=$2,end_date=$3,visits=$4,tutor_name=$5,phone=$6,street=$7,neighborhood=$8,animal_count=$9,animals=$10,notes=$11,estimated_total=$12,price_detail=$13,source=$14,calendar_event_id=NULL,updated_at=NOW() WHERE id=$15 RETURNING *',[p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,p.estimatedTotal,priceDetail,p.source,req.params.id])).rows[0];
+  let row=(await pool.query('UPDATE cps_bookings SET service=$1,start_date=$2,end_date=$3,visits=$4,tutor_name=$5,phone=$6,street=$7,neighborhood=$8,animal_count=$9,animals=$10,notes=$11,estimated_total=$12,price_detail=$13,source=$14,calendar_event_id=NULL,updated_at=NOW() WHERE id=$15 RETURNING *',[p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,estimatedTotal,priceDetail,p.source,req.params.id])).rows[0];
   let calendarLinked=false;
   if(['confirmed','completed'].includes(row.status)){
     try{
@@ -344,7 +369,7 @@ app.put('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{try{
       if(eventId){row=(await pool.query('UPDATE cps_bookings SET calendar_event_id=$1,updated_at=NOW() WHERE id=$2 RETURNING *',[eventId,req.params.id])).rows[0];calendarLinked=true}
     }catch(e){console.error('Edit booking calendar create:',e.message)}
   }
-  await audit(req,'edit_booking','booking',req.params.id,{source:p.source,calendarLinked});
+  await audit(req,'edit_booking','booking',req.params.id,{source:p.source,autoPrice:p.autoPrice,calendarLinked});
   res.json({booking:mapBooking(row),calendarLinked,financeUnchanged:row.status==='completed'});
 }catch(e){
   if(e instanceof z.ZodError)return res.status(400).json({error:'Confira os dados editados do atendimento.'});
