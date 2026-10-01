@@ -30,11 +30,9 @@ function activeDays(){
 }
 function calculate(){
   updateDateMode();
-  const service=serviceEl.value,start=asDate(startDateEl.value),end=asDate(endDateEl.value),visits=Math.max(1,Number(visitsEl.value||1)),days=activeDays();
+  const service=serviceEl.value,start=asDate(startDateEl.value),end=asDate(endDateEl.value),visits=Math.max(1,Number(visitsEl.value||1)),days=activeDays(),specific=dateModeEl.value==='specific'&&['pet_sitter','pet_sitter_passeio','passeio'].includes(service);
   const dogs=count('dogCount'),cats=count('catCount'),smallPets=count('birdCount')+count('hamsterCount')+count('guineaPigCount')+count('fishCount')+count('otherCount');
   let total=0,detail='Selecione serviço e datas',pending=false;
-  visitsWrap.classList.toggle('hidden',!['pet_sitter','pet_sitter_passeio'].includes(service)||specific);
-  const specific=dateModeEl.value==='specific'&&['pet_sitter','pet_sitter_passeio','passeio'].includes(service);
   if(!specific&&start&&end&&end<start)detail='A data final precisa ser igual ou posterior à inicial.';
   else if(specific&&!specificDates.length)detail='Adicione pelo menos uma data.';
   else if(service&&days>0){
