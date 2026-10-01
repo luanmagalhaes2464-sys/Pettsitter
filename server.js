@@ -67,12 +67,12 @@ function calc(service,start,end,visits,counts={}){
   const totalVisits=isSpecific&&schedule.length?schedule.reduce((sum,x)=>sum+x.visits,0):days*n;
   if (!days) throw new Error('Período inválido.');
   if (service==='pet_sitter') return { total:totalVisits*35, detail:isSpecific?totalVisits+' visita(s) distribuída(s) em '+days+' dia(s) × R$ 35':days+' dia(s) × '+n+' visita(s)/dia × R$ 35 (sem acréscimo por quantidade de animais)' };
-  if (service==='pet_sitter_passeio') { const rate=35+(15*dogs);return { total:totalVisits*rate, detail:isSpecific?totalVisits+' visita(s) em '+days+' dia(s) × (R$ 35 + R$ 15 × '+dogs+' cão(ães))':days+' dia(s) × '+n+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))' }; }
+  if (service==='pet_sitter_passeio') { const rate=50;return { total:totalVisits*rate, detail:isSpecific?totalVisits+' visita(s) em '+days+' dia(s) × R$ 50 (R$ 35 pet sitter + R$ 15 passeio de 15 min)':days+' dia(s) × '+n+' visita(s)/dia × R$ 50 (R$ 35 pet sitter + R$ 15 passeio de 15 min)' }; }
   if (service==='passeio') return { total:days*dogs*50, detail:days+' passeio(s) × '+dogs+' cão(ães) × R$ 50' };
   if (service==='hospedagem') {
-    const q=stayDays(start,end),billable=dogs+cats,known=q*billable*65;
-    if(smallPets>0||billable===0)return {total:null,detail:(billable?q+' diária(s) × '+billable+' cão/gato × R$ 65 = '+money(known)+'; ':'')+'demais animais: valor a validar'};
-    return { total:known, detail:q+' diária(s) × '+billable+' cão/gato × R$ 65' };
+    const q=stayDays(start,end),billable=dogs+cats,rate=q>5?65:70,known=q*billable*rate;
+    if(smallPets>0||billable===0)return {total:null,detail:(billable?q+' diária(s) × '+billable+' cão/gato × R$ '+rate+' = '+money(known)+'; ':'')+'demais animais: valor a validar'};
+    return { total:known, detail:q+' diária(s) × '+billable+' cão/gato × R$ '+rate+(q>5?' (desconto para mais de 5 diárias)':'') };
   }
   if (service==='vacinacao') return { total:null, detail:'Valor definido após avaliação do protocolo e da vacina indicada.' };
   throw new Error('Serviço inválido.');
