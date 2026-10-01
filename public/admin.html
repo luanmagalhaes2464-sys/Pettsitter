@@ -15,7 +15,7 @@
     </div>
     <div class="field-grid two">
       <label>Serviço<select name="service" required><option value="pet_sitter">Pet sitter</option><option value="pet_sitter_passeio">Pet sitter + passeio</option><option value="passeio">Passeio</option><option value="hospedagem">Hospedagem</option><option value="vacinacao">Vacinação</option></select></label>
-      <label>Visitas por dia<input name="visits" type="number" min="1" max="10" value="1" required></label>
+      <label id="adminVisitsWrap">Visitas por dia<input name="visits" type="number" min="1" max="10" value="1" required></label>
     </div>
     <div class="field-grid two">
       <label>Data inicial<input name="startDate" type="date" required></label>
@@ -25,15 +25,27 @@
       <label>Nome do tutor<input name="tutorName" maxlength="140" required></label>
       <label>Telefone / WhatsApp<input name="phone" maxlength="40" required></label>
     </div>
-    <div class="field-grid two">
-      <label>Rua e número<input name="street" maxlength="220" required></label>
-      <label>Bairro<input name="neighborhood" maxlength="140" required></label>
+    <div id="adminAddressFields" class="field-grid two">
+      <label>Rua e número<input name="street" maxlength="220"></label>
+      <label>Bairro<input name="neighborhood" maxlength="140"></label>
     </div>
-    <div class="field-grid two">
-      <label>Quantidade de animais<input name="animalCount" type="number" min="1" max="100" value="1" required></label>
-      <label>Animais<input name="animals" maxlength="300" placeholder="Ex.: 2 cães — Florzinha e Foguinho" required></label>
+    <div class="field-hint" id="adminAddressHint"></div>
+    <div class="field-hint">Informe a quantidade por espécie para usar os mesmos cálculos do site.</div>
+    <div class="pet-count-grid admin-pet-count-grid">
+      <label>Cães<input name="dogCount" type="number" min="0" max="30" value="0"></label>
+      <label>Gatos<input name="catCount" type="number" min="0" max="30" value="0"></label>
+      <label>Aves<input name="birdCount" type="number" min="0" max="30" value="0"></label>
+      <label>Hamsters<input name="hamsterCount" type="number" min="0" max="30" value="0"></label>
+      <label>Porquinhos-da-índia<input name="guineaPigCount" type="number" min="0" max="30" value="0"></label>
+      <label>Peixes<input name="fishCount" type="number" min="0" max="100" value="0"></label>
+      <label>Outros<input name="otherCount" type="number" min="0" max="30" value="0"></label>
+      <label>Quais outros?<input name="otherAnimals" maxlength="120" placeholder="Ex.: coelho"></label>
     </div>
-    <label>Valor acordado (R$)<input name="estimatedTotal" type="number" min="0" step="0.01" placeholder="Deixe vazio se ainda não souber"></label>
+    <label>Nomes dos animais <small>Opcional</small><input name="petNames" maxlength="180" placeholder="Ex.: Florzinha e Foguinho"></label>
+    <div class="admin-price-box">
+      <div><strong>Valor do atendimento</strong><small id="adminPriceDetail">Será calculado automaticamente com os mesmos preços do site.</small></div>
+      <div class="admin-price-actions"><label>Valor acordado (R$)<input id="adminEstimatedTotal" name="estimatedTotal" type="number" min="0" step="0.01" placeholder="A validar"></label><button id="adminResetPrice" class="btn btn-small btn-ghost" type="button">Usar valor automático</button></div>
+    </div>
     <label>Observações<textarea name="notes" rows="4" maxlength="1200" placeholder="Rotina, horários, medicação, detalhes combinados..."></textarea></label>
     <p id="bookingEditorHint" class="muted">Ao criar como Confirmada, o sistema tentará vinculá-la à agenda. Ao criar como Concluída com valor, o recebimento será registrado conforme a regra atual do financeiro.</p>
     <div class="form-message" id="bookingEditorMessage"></div>
