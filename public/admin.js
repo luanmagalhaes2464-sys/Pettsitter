@@ -1,6 +1,30 @@
 let csrf='',bookingsCache=[],financeCache={payments:[],expenses:[]},editingPaymentId='',editingExpenseId='',bookingCalendar=null,calendarEventBooking=null;const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}),dateFmt=new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'});const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);function esc(v=''){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}function fd(form){return Object.fromEntries(new FormData(form).entries())}function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 async function api(url,opt={}){opt.headers={...(opt.headers||{}),'Content-Type':'application/json'};if(!['GET','HEAD'].includes((opt.method||'GET').toUpperCase()))opt.headers['x-csrf-token']=csrf;const r=await fetch(url,opt);if(r.status===401){location.href='/login';throw new Error('Sessão expirada')}const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Erro na solicitação');return j}
-async function boot(){const r=await fetch('/api/auth/me');if(!r.ok){location.href='/login';return}const j=await r.json();csrf=j.csrfToken;$('#userName').textContent=j.user.name;setDates();await Promise.all([loadDashboard(),loadBookings(),loadVaccines(),loadFinance(),loadIntegrations()]);initCalendar()}
+async function boot(){
+  try{
+    const r=await fetch('/api/auth/me',{cache:'no-store'});
+    if(!r.ok){location.href='/login';return}
+    const j=await r.json();
+    csrf=j.csrfToken;
+    $('#userName').textContent=j.user.name;
+    setDates();
+    const tasks=[
+      ['dashboard',loadDashboard],
+      ['atendimentos',loadBookings],
+      ['vacinas',loadVaccines],
+      ['financeiro',loadFinance],
+      ['integrações',loadIntegrations]
+    ];
+    const results=await Promise.allSettled(tasks.map(([,fn])=>fn()));
+    const failed=results.map((x,i)=>x.status==='rejected'?tasks[i][0]:null).filter(Boolean);
+    if(failed.length)toast('Algumas áreas não carregaram: '+failed.join(', ')+'. Atualize a página.','error');
+    initCalendar();
+  }catch(e){
+    console.error('Boot admin:',e);
+    const name=$('#userName');if(name)name.textContent='Erro ao carregar';
+    toast('Não foi possível carregar o painel. Atualize a página.','error');
+  }
+}
 function setDates(){$('#paymentForm [name=paidAt]').value=today();$('#expenseForm [name=occurredAt]').value=today()}
 function activateTab(name){
   $('.tab-btn').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));
@@ -258,7 +282,7 @@ async function submitFinance(form,type){
   try{await api(url,{method:editingId?'PUT':'POST',body:JSON.stringify(fd(form))});msg.className='form-message success';msg.textContent=editingId?'Alteração salva.':'Salvo com sucesso.';resetFinanceEdit(type);await Promise.all([loadFinance(),loadDashboard(),loadBookings()])}catch(e){msg.className='form-message error';msg.textContent=e.message}
 }
 $('#paymentCancelEdit').addEventListener('click',()=>resetFinanceEdit('payment'));$('#expenseCancelEdit').addEventListener('click',()=>resetFinanceEdit('expense'));
-$('#paymentForm').addEventListener('submit',e=>{e.preventDefault();submitFinance(e.currentTarget,'payment')});$('#expenseForm').addEventListener('submit',e=>{e.preventDefault();submitFinance(e.currentTarget,'expense')});$('#passwordForm').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,msg=form.querySelector('.form-message');try{await api('/api/auth/change-password',{method:'POST',body:JSON.stringify(fd(form))});msg.className='form-message success';msg.textContent='Senha alterada.';form.reset()}catch(err){msg.className='form-message error';msg.textContent=err.message}});boot();
+$('#paymentForm').addEventListener('submit',e=>{e.preventDefault();submitFinance(e.currentTarget,'payment')});$('#expenseForm').addEventListener('submit',e=>{e.preventDefault();submitFinance(e.currentTarget,'expense')});$('#passwordForm').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,msg=form.querySelector('.form-message');try{await api('/api/auth/change-password',{method:'POST',body:JSON.stringify(fd(form))});msg.className='form-message success';msg.textContent='Senha alterada.';form.reset()}catch(err){msg.className='form-message error';msg.textContent=err.message}});
 
 async function loadIntegrations(){try{
   const j=await api('/api/admin/integrations');
@@ -285,3 +309,5 @@ async function loadVaccines(){try{
 if($('#vaccineForm'))$('#vaccineForm').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,msg=form.querySelector('.form-message');msg.className='form-message';msg.textContent='Salvando...';try{await api('/api/admin/vaccinations',{method:'POST',body:JSON.stringify(fd(form))});msg.className='form-message success';msg.textContent='Vacinação registrada e cartão atualizado.';form.reset();await loadVaccines()}catch(err){msg.className='form-message error';msg.textContent=err.message}});
 
 $('#dashClearBtn').addEventListener('click',()=>{$('#dashFrom').value='';$('#dashTo').value='';$('#dashService').value='';loadDashboard()});
+
+boot();
