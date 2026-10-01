@@ -23,7 +23,7 @@ async function loadDashboard(){
   $('#mBookings').textContent=j.summary.bookings;
   $('#recentBookings').innerHTML=tableBookings(j.recent,true);
   const max=Math.max(1,...j.monthly.map(x=>Math.max(x.received,x.receivable,x.expenses)));
-  const bar=(value,cls)=>value>0?'<i class="bar '+cls+'" style="width:'+Math.min(100,value/max*100)+'%"></i>':'';
+  const bar=(value,cls)=>value>0?'<progress class="bar-progress '+cls+'" max="'+max+'" value="'+value+'"></progress>':'<div class="bar-empty"></div>';
   $('#monthlyChart').innerHTML=j.monthly.length?j.monthly.map(x=>`
     <div class="month-group">
       <div class="month-title">${esc(x.month.slice(5))}/${esc(x.month.slice(2,4))}</div>
@@ -117,7 +117,7 @@ $('#calendarEventComplete').addEventListener('click',async()=>{
   try{
     const result=await api('/api/admin/bookings/'+b.id,{method:'PATCH',body:JSON.stringify({status:'completed'})});
     $('#calendarEventDialog').close();toast(result.paymentCreated?'Atendimento concluído e recebimento registrado.':'Atendimento concluído.');
-    await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);refreshCalendar();refreshCalendar();
+    await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);refreshCalendar();
   }catch(e){toast(e.message,'error')}finally{btn.disabled=false}
 });
 $('#calendarAddBookingBtn').addEventListener('click',()=>openBookingEditor());
