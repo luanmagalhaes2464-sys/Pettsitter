@@ -33,10 +33,7 @@
       <label>Quantidade de animais<input name="animalCount" type="number" min="1" max="100" value="1" required></label>
       <label>Animais<input name="animals" maxlength="300" placeholder="Ex.: 2 cães — Florzinha e Foguinho" required></label>
     </div>
-    <div class="field-grid two">
-      <label>Valor acordado (R$)<input name="estimatedTotal" type="number" min="0" step="0.01" placeholder="Deixe vazio se ainda não souber"></label>
-      <label>Observação curta sobre origem<input name="sourceNote" maxlength="120" placeholder="Ex.: solicitado pelo WhatsApp"></label>
-    </div>
+    <label>Valor acordado (R$)<input name="estimatedTotal" type="number" min="0" step="0.01" placeholder="Deixe vazio se ainda não souber"></label>
     <label>Observações<textarea name="notes" rows="4" maxlength="1200" placeholder="Rotina, horários, medicação, detalhes combinados..."></textarea></label>
     <p id="bookingEditorHint" class="muted">Ao criar como Confirmada, o sistema tentará vinculá-la à agenda. Ao criar como Concluída com valor, o recebimento será registrado conforme a regra atual do financeiro.</p>
     <div class="form-message" id="bookingEditorMessage"></div>
