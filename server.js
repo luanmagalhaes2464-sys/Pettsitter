@@ -351,20 +351,14 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
     WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
       AND ($3::text IS NULL OR b.service=$3::text)
     ORDER BY start_date DESC,created_at DESC`;
-  const upcomingSql=`
-    SELECT * FROM cps_bookings b
-    WHERE b.status='confirmed' AND b.end_date >= CURRENT_DATE
-      AND ($1::text IS NULL OR b.service=$1::text)
-    ORDER BY b.start_date ASC,b.created_at ASC
-    LIMIT 8`;
-  const [s,m,bc,rv,r,u]=await Promise.all([
-    pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args),pool.query(upcomingSql,[service])
+  const [s,m,bc,rv,r]=await Promise.all([
+    pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args)
   ]);
   const x=s.rows[0], counts=new Map(bc.rows.map(v=>[v.service,Number(v.bookings)])), revenues=new Map(rv.rows.map(v=>[v.service,Number(v.received)]));
   const keys=new Set([...counts.keys(),...revenues.keys()]);
   const byService=[...keys].filter(k=>k!=='unlinked').map(k=>({service:k,serviceLabel:SERVICE[k]||k,bookings:counts.get(k)||0,received:revenues.get(k)||0})).sort((a,b)=>b.received-a.received);
   if(revenues.has('unlinked'))byService.push({service:'unlinked',serviceLabel:'Recebimento sem vínculo',bookings:0,received:revenues.get('unlinked')||0});
-  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),receivable:Number(x.receivable),contracted:Number(x.contracted),bookings:Number(x.bookings)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),receivable:Number(v.receivable),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking),upcoming:u.rows.map(mapBooking)});
+  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),receivable:Number(x.receivable),contracted:Number(x.contracted),bookings:Number(x.bookings)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),receivable:Number(v.receivable),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
 app.get('/api/admin/calendar-events',needAuth,needDb,async(req,res)=>{try{
   const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))?String(v):null;
