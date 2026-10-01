@@ -29,6 +29,8 @@ app.use(express.urlencoded({ extended: false, limit: '80kb' }));
 const PgStore = connectPgSimple(session);
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.createHash('sha256').update('casal-pet-sitter-session:'+DB).digest('hex');
 app.use(session({ store: DB ? new PgStore({ pool, tableName:'cps_session', createTableIfMissing:true }) : undefined, secret:SESSION_SECRET, resave:false, saveUninitialized:false, name:'cps.sid', cookie:{ httpOnly:true, secure:PROD, sameSite:'lax', maxAge:12*60*60*1000 } }));
+app.use('/vendor/fullcalendar',express.static(path.join(__dirname,'node_modules/fullcalendar'),{maxAge:PROD?'7d':0}));
+app.use('/vendor/fullcalendar-core',express.static(path.join(__dirname,'node_modules/@fullcalendar/core'),{maxAge:PROD?'7d':0}));
 app.use(express.static(path.join(__dirname,'public'), { maxAge: 0, etag: true }));
 app.get('/favicon.ico',(_req,res)=>res.redirect(301,'/favicon.svg'));
 
@@ -47,6 +49,7 @@ const text = (v,n=500) => String(v||'').trim().slice(0,n);
 const d = v => new Date(String(v)+'T12:00:00-03:00');
 const daysInclusive = (a,b) => Math.max(0,Math.floor((d(b)-d(a))/86400000)+1);
 const stayDays = (a,b) => Math.max(1,Math.ceil((d(b)-d(a))/86400000));
+function addIsoDays(value,n=1){const x=new Date(String(value).slice(0,10)+'T12:00:00Z');x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10)}
 function normalizeSpecificDates(values=[]){return [...new Set((Array.isArray(values)?values:[]).map(v=>String(v).slice(0,10)).filter(v=>/^\d{4}-\d{2}-\d{2}$/.test(v)))].sort()}
 function normalizeSpecificSchedule(values=[],fallbackDates=[],defaultVisits=1){
   const map=new Map();
@@ -348,15 +351,63 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
     WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
       AND ($3::text IS NULL OR b.service=$3::text)
     ORDER BY start_date DESC,created_at DESC`;
-  const [s,m,bc,rv,r]=await Promise.all([
-    pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args)
+  const upcomingSql=`
+    SELECT * FROM cps_bookings b
+    WHERE b.status='confirmed' AND b.end_date >= CURRENT_DATE
+      AND ($3::text IS NULL OR b.service=$3::text)
+    ORDER BY b.start_date ASC,b.created_at ASC
+    LIMIT 8`;
+  const [s,m,bc,rv,r,u]=await Promise.all([
+    pool.query(summarySql,args),pool.query(monthSql,args),pool.query(bookingCountSql,args),pool.query(revenueSql,args),pool.query(recentSql,args),pool.query(upcomingSql,args)
   ]);
   const x=s.rows[0], counts=new Map(bc.rows.map(v=>[v.service,Number(v.bookings)])), revenues=new Map(rv.rows.map(v=>[v.service,Number(v.received)]));
   const keys=new Set([...counts.keys(),...revenues.keys()]);
   const byService=[...keys].filter(k=>k!=='unlinked').map(k=>({service:k,serviceLabel:SERVICE[k]||k,bookings:counts.get(k)||0,received:revenues.get(k)||0})).sort((a,b)=>b.received-a.received);
   if(revenues.has('unlinked'))byService.push({service:'unlinked',serviceLabel:'Recebimento sem vínculo',bookings:0,received:revenues.get('unlinked')||0});
-  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),receivable:Number(x.receivable),contracted:Number(x.contracted),bookings:Number(x.bookings)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),receivable:Number(v.receivable),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
+  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),receivable:Number(x.receivable),contracted:Number(x.contracted),bookings:Number(x.bookings)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),receivable:Number(v.receivable),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking),upcoming:u.rows.map(mapBooking)});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
+app.get('/api/admin/calendar-events',needAuth,needDb,async(req,res)=>{try{
+  const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))?String(v):null;
+  const from=validDate(req.query.from),to=validDate(req.query.to);
+  const service=SERVICE[req.query.service]?String(req.query.service):null;
+  const source=['site','whatsapp','instagram','telefone','presencial','outro'].includes(String(req.query.source||''))?String(req.query.source):null;
+  const requestedStatus=String(req.query.status||'active');
+  const allowedStatus=STATUS_KEYS.includes(requestedStatus)?requestedStatus:null;
+  const q=await pool.query(`SELECT * FROM cps_bookings b
+    WHERE ($1::date IS NULL OR b.end_date >= $1::date)
+      AND ($2::date IS NULL OR b.start_date < $2::date)
+      AND ($3::text IS NULL OR b.service=$3::text)
+      AND ($4::text IS NULL OR b.source=$4::text)
+      AND (CASE WHEN $5::text='active' THEN b.status IN ('confirmed','completed')
+                WHEN $5::text='all' THEN TRUE
+                ELSE b.status=$5::text END)
+    ORDER BY b.start_date,b.created_at`,[from,to,service,source,allowedStatus||(['active','all'].includes(requestedStatus)?requestedStatus:'active')]);
+  const events=[];
+  for(const row of q.rows){
+    const b=mapBooking(row),base={booking:b,service:b.service,status:b.status,source:b.source};
+    const make=(date,visits=null,endDate=null)=>events.push({
+      id:b.id+(date?'-'+date:''),
+      title:b.tutorName+' • '+b.serviceLabel+(visits&&['pet_sitter','pet_sitter_passeio'].includes(b.service)?' ('+visits+' visita'+(visits>1?'s':'')+')':''),
+      start:date||String(b.startDate).slice(0,10),
+      end:endDate||addIsoDays(date||String(b.startDate).slice(0,10),1),
+      allDay:true,
+      extendedProps:base
+    });
+    if(b.service==='hospedagem'){
+      make(String(b.startDate).slice(0,10),null,addIsoDays(String(b.endDate).slice(0,10),1));
+    }else if(b.dateMode==='specific'&&b.specificDates.length){
+      const schedule=normalizeSpecificSchedule(b.specificSchedule,b.specificDates,b.visits);
+      for(const day of b.specificDates){make(day,schedule.find(x=>x.date===day)?.visits||b.visits)}
+    }else if(['pet_sitter','pet_sitter_passeio','passeio'].includes(b.service)){
+      let day=String(b.startDate).slice(0,10),last=String(b.endDate).slice(0,10),guard=0;
+      while(day<=last&&guard<100){make(day,['pet_sitter','pet_sitter_passeio'].includes(b.service)?b.visits:null);day=addIsoDays(day,1);guard++}
+    }else{
+      make(String(b.startDate).slice(0,10));
+    }
+  }
+  res.json({events});
+}catch(e){console.error('Calendar events:',e);res.status(500).json({error:'Não foi possível carregar a agenda.'})}});
+
 app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
   const parsed=adminBookingSchema.parse(req.body),resolved=resolveBookingDates(parsed),animalInfo=normalizeAnimals(parsed),p={...parsed,...resolved,animalCount:animalInfo.total,animals:animalInfo.summary};if(['hospedagem','vacinacao'].includes(p.service)){p.dateMode='range';p.specificDates=[];p.specificSchedule=[]}
   if(d(p.endDate)<d(p.startDate))return res.status(400).json({error:'A data final deve ser igual ou posterior à inicial.'});
