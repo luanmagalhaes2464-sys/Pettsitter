@@ -61,9 +61,9 @@ function calculateAdminPrice(force=false){
   else if(specific&&!adminSpecificDates.length)detail='Adicione pelo menos uma data.';
   else if(service&&days>0){
     if(service==='pet_sitter'){total=totalVisits*35;detail=specific?totalVisits+' visita(s) distribuída(s) em '+days+' dia(s) × R$ 35':days+' dia(s) × '+visits+' visita(s)/dia × R$ 35 — sem acréscimo por quantidade de animais'}
-    else if(service==='pet_sitter_passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{const rate=35+(15*dogs);total=totalVisits*rate;detail=specific?totalVisits+' visita(s) em '+days+' dia(s) × (R$ 35 + R$ 15 × '+dogs+' cão(ães))':days+' dia(s) × '+visits+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))'}}
+    else if(service==='pet_sitter_passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{const rate=50;total=totalVisits*rate;detail=specific?totalVisits+' visita(s) em '+days+' dia(s) × R$ 50 (R$ 35 pet sitter + R$ 15 passeio de 15 min)':days+' dia(s) × '+visits+' visita(s)/dia × R$ 50 (R$ 35 pet sitter + R$ 15 passeio de 15 min)'}}
     else if(service==='passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{total=days*dogs*50;detail=days+' passeio(s) × '+dogs+' cão(ães) × R$ 50'}}
-    else if(service==='hospedagem'){const d=adminStayDays(start,end),billable=dogs+cats,known=d*billable*65;if(small||!billable){detail=(billable?d+' diária(s) × '+billable+' cão/gato × R$ 65 = '+money.format(known)+'; ':'')+'demais animais: valor a validar'}else{total=known;detail=d+' diária(s) × '+billable+' cão/gato × R$ 65'}}
+    else if(service==='hospedagem'){const d=adminStayDays(start,end),billable=dogs+cats,rate=d>5?65:70,known=d*billable*rate;if(small||!billable){detail=(billable?d+' diária(s) × '+billable+' cão/gato × R$ '+rate+' = '+money.format(known)+'; ':'')+'demais animais: valor a validar'}else{total=known;detail=d+' diária(s) × '+billable+' cão/gato × R$ '+rate+(d>5?' (desconto para mais de 5 diárias)':'')}}
     else if(service==='vacinacao')detail='Valor definido após avaliação do protocolo e da vacina indicada.';
   }
   if(force)adminPriceManual=false;
