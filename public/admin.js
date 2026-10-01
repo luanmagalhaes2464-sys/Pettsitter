@@ -1,8 +1,13 @@
-let csrf='',bookingsCache=[],financeCache={payments:[],expenses:[]},editingPaymentId='',editingExpenseId='';const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}),dateFmt=new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'});const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);function esc(v=''){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}function fd(form){return Object.fromEntries(new FormData(form).entries())}function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+let csrf='',bookingsCache=[],financeCache={payments:[],expenses:[]},editingPaymentId='',editingExpenseId='',bookingCalendar=null,calendarEventBooking=null;const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}),dateFmt=new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'});const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);function esc(v=''){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}function fd(form){return Object.fromEntries(new FormData(form).entries())}function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 async function api(url,opt={}){opt.headers={...(opt.headers||{}),'Content-Type':'application/json'};if(!['GET','HEAD'].includes((opt.method||'GET').toUpperCase()))opt.headers['x-csrf-token']=csrf;const r=await fetch(url,opt);if(r.status===401){location.href='/login';throw new Error('Sessão expirada')}const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Erro na solicitação');return j}
-async function boot(){const r=await fetch('/api/auth/me');if(!r.ok){location.href='/login';return}const j=await r.json();csrf=j.csrfToken;$('#userName').textContent=j.user.name;setDates();await Promise.all([loadDashboard(),loadBookings(),loadVaccines(),loadFinance(),loadIntegrations()])}
+async function boot(){const r=await fetch('/api/auth/me');if(!r.ok){location.href='/login';return}const j=await r.json();csrf=j.csrfToken;$('#userName').textContent=j.user.name;setDates();await Promise.all([loadDashboard(),loadBookings(),loadVaccines(),loadFinance(),loadIntegrations()]);initCalendar()}
 function setDates(){$('#paymentForm [name=paidAt]').value=today();$('#expenseForm [name=occurredAt]').value=today()}
-$$('.tab-btn').forEach(b=>b.addEventListener('click',()=>{$$('.tab-btn').forEach(x=>x.classList.remove('active'));$$('.tab-panel').forEach(x=>x.classList.remove('active'));b.classList.add('active');$('#tab-'+b.dataset.tab).classList.add('active')}));
+function activateTab(name){
+  $('.tab-btn').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));
+  $('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+name));
+  if(name==='calendar'&&bookingCalendar){setTimeout(()=>{bookingCalendar.updateSize();bookingCalendar.refetchEvents()},20)}
+}
+$('.tab-btn').forEach(b=>b.addEventListener('click',()=>activateTab(b.dataset.tab)));
 $('#logoutBtn').addEventListener('click',async()=>{await api('/api/auth/logout',{method:'POST',body:'{}'});location.href='/login'});$('#refreshDashboard').addEventListener('click',loadDashboard);$('#dashFilterBtn').addEventListener('click',loadDashboard);
 async function loadDashboard(){
   const q=new URLSearchParams();
@@ -26,6 +31,7 @@ async function loadDashboard(){
       <div class="month-series"><span>A receber</span><div class="bar-track">${bar(x.receivable,'receivable')}</div><strong>${money.format(x.receivable)}</strong></div>
       <div class="month-series"><span>Despesas</span><div class="bar-track">${bar(x.expenses,'expense')}</div><strong>${money.format(x.expenses)}</strong></div>
     </div>`).join(''):'<div class="empty">Sem movimentação no período.</div>';
+  $('#upcomingBookings').innerHTML=j.upcoming?.length?tableBookings(j.upcoming,true):'<div class="empty">Nenhum atendimento confirmado a partir de hoje.</div>';
   $('#serviceBreakdown').innerHTML=j.byService?.length?`<table><thead><tr><th>Serviço</th><th>Atendimentos</th><th>Recebido</th></tr></thead><tbody>${j.byService.map(x=>`<tr><td>${esc(x.serviceLabel)}</td><td>${x.bookings}</td><td><strong>${money.format(x.received)}</strong></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Ainda não há recebimentos vinculados a serviços nesse período.</div>'
 }
 function tableBookings(rows,compact=false){
@@ -37,12 +43,87 @@ function toast(message,type='success'){const el=$('#adminToast');if(!el)return;e
 async function loadBookings(){
   const q=new URLSearchParams();if($('#bookingStatus').value)q.set('status',$('#bookingStatus').value);if($('#bookingSearch').value.trim())q.set('search',$('#bookingSearch').value.trim());
   const j=await api('/api/admin/bookings?'+q.toString());bookingsCache=j.bookings;$('#bookingsTable').innerHTML=tableBookings(j.bookings);
-  $$('.status-select').forEach(s=>s.addEventListener('change',async()=>{const previous=bookingsCache.find(b=>b.id===s.dataset.id)?.status||'new';s.disabled=true;try{const result=await api('/api/admin/bookings/'+s.dataset.id,{method:'PATCH',body:JSON.stringify({status:s.value})});if(s.value==='confirmed')toast(result.calendarLinked?'Atendimento confirmado e vinculado à agenda.':'Atendimento confirmado. Autorize o Google Agenda e use o botão Agenda.',result.calendarLinked?'success':'error');if(s.value==='completed'&&result.paymentCreated)toast('Atendimento concluído e recebimento via Pix registrado.');await Promise.all([loadDashboard(),loadFinance(),loadBookings()])}catch(e){s.value=previous;s.disabled=false;toast(e.message,'error')}}));
-  $$('.calendar-retry').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{await api('/api/admin/bookings/'+btn.dataset.id+'/calendar',{method:'POST',body:'{}'});toast('Atendimento vinculado à agenda de Luan e Isabela.');await loadBookings()}catch(e){toast(e.message,'error');btn.disabled=false}}));
+  $$('.status-select').forEach(s=>s.addEventListener('change',async()=>{const previous=bookingsCache.find(b=>b.id===s.dataset.id)?.status||'new';s.disabled=true;try{const result=await api('/api/admin/bookings/'+s.dataset.id,{method:'PATCH',body:JSON.stringify({status:s.value})});if(s.value==='confirmed')toast(result.calendarLinked?'Atendimento confirmado e vinculado à agenda.':'Atendimento confirmado. Autorize o Google Agenda e use o botão Agenda.',result.calendarLinked?'success':'error');if(s.value==='completed'&&result.paymentCreated)toast('Atendimento concluído e recebimento via Pix registrado.');await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);refreshCalendar()}catch(e){s.value=previous;s.disabled=false;toast(e.message,'error')}}));
+  $$('.calendar-retry').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{await api('/api/admin/bookings/'+btn.dataset.id+'/calendar',{method:'POST',body:'{}'});toast('Atendimento vinculado à agenda de Luan e Isabela.');await loadBookings();refreshCalendar()}catch(e){toast(e.message,'error');btn.disabled=false}}));
   $$('.edit-booking').forEach(btn=>btn.addEventListener('click',()=>openBookingEditor(btn.dataset.id)));
   $$('.delete-booking').forEach(btn=>btn.addEventListener('click',()=>openDeleteDialog(btn.dataset.id)));
   fillBookingSelect();
 }
+
+const calendarServiceColors={
+  pet_sitter:{bg:'#5e7d68',border:'#456451',text:'#fff'},
+  pet_sitter_passeio:{bg:'#9a7247',border:'#7f5935',text:'#fff'},
+  passeio:{bg:'#54728c',border:'#3e5d77',text:'#fff'},
+  hospedagem:{bg:'#8a6b91',border:'#6f5377',text:'#fff'},
+  vacinacao:{bg:'#ad6a63',border:'#91524c',text:'#fff'}
+};
+function refreshCalendar(){if(bookingCalendar)bookingCalendar.refetchEvents()}
+function calendarStatusClass(status){return 'calendar-status-'+String(status||'new')}
+function initCalendar(){
+  const host=$('#bookingCalendar');if(!host)return;
+  if(typeof FullCalendar==='undefined'){host.innerHTML='<div class="empty">Não foi possível carregar o calendário. Atualize a página.</div>';return}
+  bookingCalendar=new FullCalendar.Calendar(host,{
+    locale:'pt-br',
+    initialView:'dayGridMonth',
+    firstDay:1,
+    height:'auto',
+    dayMaxEvents:true,
+    nowIndicator:true,
+    selectable:true,
+    navLinks:true,
+    headerToolbar:{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,timeGridDay,listWeek'},
+    buttonText:{today:'Hoje',month:'Mês',week:'Semana',day:'Dia',list:'Lista'},
+    events:async(info,success,failure)=>{
+      try{
+        const q=new URLSearchParams({from:info.startStr.slice(0,10),to:info.endStr.slice(0,10),status:$('#calendarStatus').value||'active'});
+        if($('#calendarService').value)q.set('service',$('#calendarService').value);
+        if($('#calendarSource').value)q.set('source',$('#calendarSource').value);
+        const j=await api('/api/admin/calendar-events?'+q.toString());
+        success(j.events.map(ev=>{
+          const colors=calendarServiceColors[ev.extendedProps?.service]||calendarServiceColors.pet_sitter;
+          return {...ev,backgroundColor:colors.bg,borderColor:colors.border,textColor:colors.text,classNames:[calendarStatusClass(ev.extendedProps?.status)]}
+        }));
+      }catch(e){failure(e);toast(e.message,'error')}
+    },
+    dateClick:info=>openBookingEditor('',info.dateStr),
+    eventClick:info=>openCalendarEvent(info.event.extendedProps.booking)
+  });
+  bookingCalendar.render();
+}
+function openCalendarEvent(b){
+  calendarEventBooking=b;if(!b)return;
+  $('#calendarEventTitle').textContent=b.tutorName+' • '+b.serviceLabel;
+  $('#calendarEventSubtitle').textContent=bookingDateText(b)+' • '+b.statusLabel;
+  const schedule=b.dateMode==='specific'&&Array.isArray(b.specificSchedule)&&b.specificSchedule.length&&['pet_sitter','pet_sitter_passeio'].includes(b.service)
+    ?'<div><span>Visitas</span><strong>'+b.specificSchedule.map(x=>dateFmt.format(new Date(x.date+'T12:00:00Z'))+': '+x.visits).join(' • ')+'</strong></div>'
+    :(['pet_sitter','pet_sitter_passeio'].includes(b.service)?'<div><span>Visitas por dia</span><strong>'+b.visits+'</strong></div>':'');
+  $('#calendarEventDetails').innerHTML=
+    '<div><span>Animais</span><strong>'+esc(b.animals||'—')+'</strong></div>'+
+    '<div><span>Telefone</span><strong>'+esc(b.phone||'—')+'</strong></div>'+
+    (b.service==='hospedagem'?'':'<div><span>Endereço</span><strong>'+esc((b.street||'')+(b.neighborhood?' • '+b.neighborhood:''))+'</strong></div>')+
+    schedule+
+    '<div><span>Valor</span><strong>'+(b.estimatedTotal==null?'A confirmar':money.format(b.estimatedTotal))+'</strong></div>'+
+    '<div><span>Origem</span><strong>'+esc(b.sourceLabel||'—')+'</strong></div>'+
+    '<div><span>Observações</span><strong>'+esc(b.notes||'Sem observações')+'</strong></div>';
+  const digits=String(b.phone||'').replace(/\D/g,'').replace(/^(?!55)(\d{10,11})$/,'55$1');
+  $('#calendarEventWhatsApp').href='https://wa.me/'+digits;
+  $('#calendarEventComplete').hidden=b.status==='completed'||b.status==='cancelled';
+  $('#calendarEventDialog').showModal();
+}
+$('#closeCalendarEvent').addEventListener('click',()=>$('#calendarEventDialog').close());
+$('#calendarEventEdit').addEventListener('click',()=>{const b=calendarEventBooking;if(!b)return;$('#calendarEventDialog').close();openBookingEditor(b.id,'',b)});
+$('#calendarEventComplete').addEventListener('click',async()=>{
+  const b=calendarEventBooking;if(!b)return;const btn=$('#calendarEventComplete');btn.disabled=true;
+  try{
+    const result=await api('/api/admin/bookings/'+b.id,{method:'PATCH',body:JSON.stringify({status:'completed'})});
+    $('#calendarEventDialog').close();toast(result.paymentCreated?'Atendimento concluído e recebimento registrado.':'Atendimento concluído.');
+    await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);refreshCalendar();refreshCalendar();
+  }catch(e){toast(e.message,'error')}finally{btn.disabled=false}
+});
+$('#calendarAddBookingBtn').addEventListener('click',()=>openBookingEditor());
+['calendarService','calendarStatus','calendarSource'].forEach(id=>$('#'+id).addEventListener('change',refreshCalendar));
+$('#openCalendarFromDashboard').addEventListener('click',()=>activateTab('calendar'));
+
 let bookingEditorId='',adminPriceManual=false,adminSpecificDates=[],adminSpecificSchedule=[];
 const adminCountNames=['dogCount','catCount','birdCount','hamsterCount','guineaPigCount','fishCount','otherCount'];
 function setBookingEditorField(name,value){const el=$('#bookingEditorForm [name="'+name+'"]');if(el)el.value=value==null?'':value}
@@ -94,12 +175,12 @@ function calculateAdminPrice(force=false){
   $('#adminPriceDetail').textContent=adminPriceManual?'Valor ajustado manualmente. Clique em “Usar valor automático” para recalcular.':detail;
   return{total,detail};
 }
-function openBookingEditor(id=''){
+function openBookingEditor(id='',presetDate='',seed=null){
   const dialog=$('#bookingEditorDialog'),form=$('#bookingEditorForm'),msg=$('#bookingEditorMessage');
   bookingEditorId=id;adminPriceManual=false;adminSpecificDates=[];adminSpecificSchedule=[];form.reset();msg.className='form-message';msg.textContent='';
-  setBookingEditorField('source','whatsapp');setBookingEditorField('status','new');setBookingEditorField('service','pet_sitter');setBookingEditorField('dateMode','range');setBookingEditorField('visits','1');setBookingEditorField('startDate',today());setBookingEditorField('endDate',today());
+  setBookingEditorField('source','whatsapp');setBookingEditorField('status','new');setBookingEditorField('service','pet_sitter');setBookingEditorField('dateMode','range');setBookingEditorField('visits','1');setBookingEditorField('startDate',presetDate||today());setBookingEditorField('endDate',presetDate||today());
   adminCountNames.forEach(name=>setBookingEditorField(name,0));setBookingEditorField('otherAnimals','');setBookingEditorField('petNames','');
-  const editing=Boolean(id),b=editing?bookingsCache.find(x=>x.id===id):null;
+  const editing=Boolean(id),b=editing?(seed||bookingsCache.find(x=>x.id===id)):null;
   $('#bookingEditorTitle').textContent=editing?'Editar atendimento':'Novo atendimento';
   $('#bookingEditorSubtitle').textContent=editing?'Corrija os dados da solicitação. Os campos mudam conforme o serviço e o valor segue a mesma regra do site.':'Cadastre uma solicitação recebida fora do site. Os campos e o valor se ajustam conforme o serviço.';
   $('#bookingEditorStatusWrap').hidden=editing;
@@ -147,7 +228,7 @@ $('#bookingEditorDialog').addEventListener('close',()=>{bookingEditorId='';admin
 
 let bookingToDelete='';
 function openDeleteDialog(id){const booking=bookingsCache.find(b=>b.id===id);bookingToDelete=id;$('#deleteBookingText').textContent=`O registro de ${booking?.tutorName||'este tutor'} será removido permanentemente${booking?.calendarLinked?' e o evento correspondente será excluído da agenda.':'.'}`;$('#deleteBookingDialog').showModal()}
-$('#deleteBookingDialog').addEventListener('close',async()=>{if($('#deleteBookingDialog').returnValue!=='confirm'||!bookingToDelete){bookingToDelete='';return}const id=bookingToDelete;bookingToDelete='';try{await api('/api/admin/bookings/'+id,{method:'DELETE',body:'{}'});toast('Atendimento excluído.');await Promise.all([loadDashboard(),loadFinance(),loadBookings()])}catch(e){toast(e.message,'error')}});
+$('#deleteBookingDialog').addEventListener('close',async()=>{if($('#deleteBookingDialog').returnValue!=='confirm'||!bookingToDelete){bookingToDelete='';return}const id=bookingToDelete;bookingToDelete='';try{await api('/api/admin/bookings/'+id,{method:'DELETE',body:'{}'});toast('Atendimento excluído.');await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);refreshCalendar()}catch(e){toast(e.message,'error')}});
 $('#bookingFilterBtn').addEventListener('click',loadBookings);$('#bookingSearch').addEventListener('keydown',e=>{if(e.key==='Enter')loadBookings()});function fillBookingSelect(){const sel=$('#paymentBooking'),cur=sel.value;sel.innerHTML='<option value="">Sem vínculo</option>'+bookingsCache.map(b=>`<option value="${b.id}" data-total="${b.estimatedTotal==null?'':b.estimatedTotal}">${esc(b.tutorName)} • ${esc(b.serviceLabel)} • ${dateFmt.format(new Date(b.startDate))}${b.estimatedTotal==null?' • a confirmar':' • '+money.format(b.estimatedTotal)}</option>`).join('');sel.value=cur;if(cur)fillAgreedAmount()}
 function fillAgreedAmount(){const sel=$('#paymentBooking'),amount=$('#paymentForm [name=amount]'),option=sel.options[sel.selectedIndex],total=option?.dataset.total;if(total!==undefined&&total!=='')amount.value=Number(total).toFixed(2);else if(sel.value)amount.value=''}
 $('#paymentBooking').addEventListener('change',fillAgreedAmount);
