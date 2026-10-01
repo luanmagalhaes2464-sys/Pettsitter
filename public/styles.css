@@ -44,3 +44,18 @@ body{overflow-x:hidden}.topbar{box-shadow:0 8px 28px rgba(75,51,31,.04)}
 .confirm-dialog{width:min(430px,calc(100% - 32px));border:1px solid #e3e5e1;border-radius:16px;padding:0;background:#fff;color:#242825;box-shadow:0 24px 70px rgba(25,31,27,.22)}.confirm-dialog::backdrop{background:rgba(24,29,26,.42);backdrop-filter:blur(2px)}.confirm-dialog form{padding:28px}.confirm-dialog h2{font-family:inherit;margin:12px 0 7px;font-size:21px}.confirm-dialog p{color:#6c716d;font-size:14px;line-height:1.5}.dialog-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#f8e9e7;color:#984943;font-weight:900}.dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:24px}.admin-page .btn-danger{background:#9a4944;color:#fff;border-color:#9a4944}.admin-page .btn-danger:hover{background:#843e3a;color:#fff}
 @media(max-width:1020px){.admin-page .admin-layout{grid-template-columns:186px 1fr}.admin-page .admin-main{padding:28px 20px}}
 @media(max-width:760px){.admin-page .admin-top{height:62px;padding:0 14px}.admin-page .admin-layout{grid-template-columns:1fr;min-height:calc(100vh - 62px)}.admin-page .admin-nav{top:62px;padding:7px 9px;background:#fff;border-right:0;border-bottom:1px solid var(--admin-border)}.admin-page .admin-main{padding:22px 13px}.admin-page .admin-heading{align-items:flex-start}.admin-page .admin-heading h1{font-size:29px}.admin-page .panel-card{padding:18px}.row-actions{min-width:230px}}
+
+.booking-editor-dialog{width:min(760px,calc(100% - 28px));max-height:calc(100vh - 36px);overflow:auto}
+.booking-editor-dialog form{padding:24px}
+.dialog-editor-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px}
+.dialog-editor-head h2{margin:6px 0 4px}
+.booking-editor-dialog .dialog-actions{position:sticky;bottom:0;background:#fff;padding-top:14px;border-top:1px solid var(--admin-border)}
+.booking-editor-dialog .field-grid.two{grid-template-columns:1fr 1fr}
+.booking-editor-dialog label{margin-bottom:12px}
+@media(max-width:760px){
+  .booking-editor-dialog{width:calc(100% - 16px);max-height:calc(100vh - 16px)}
+  .booking-editor-dialog form{padding:18px}
+  .booking-editor-dialog .field-grid.two{grid-template-columns:1fr}
+  .dialog-editor-head{gap:10px}
+  .admin-page .admin-heading{flex-wrap:wrap}
+}
