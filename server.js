@@ -343,7 +343,7 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
   res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),net:Number(x.received)-Number(x.expenses),contracted:Number(x.contracted),bookings:Number(x.bookings),clients:Number(x.clients)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
 app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
-  const parsed=adminBookingSchema.parse(req.body),resolved=resolveBookingDates(parsed),animalInfo=normalizeAnimals(parsed),p={...parsed,...resolved,animalCount:animalInfo.total,animals:animalInfo.summary};if(['hospedagem','vacinacao'].includes(p.service)){p.dateMode='range';p.specificDates=[]}
+  const parsed=adminBookingSchema.parse(req.body),resolved=resolveBookingDates(parsed),animalInfo=normalizeAnimals(parsed),p={...parsed,...resolved,animalCount:animalInfo.total,animals:animalInfo.summary};if(['hospedagem','vacinacao'].includes(p.service)){p.dateMode='range';p.specificDates=[];p.specificSchedule=[]}
   if(d(p.endDate)<d(p.startDate))return res.status(400).json({error:'A data final deve ser igual ou posterior à inicial.'});
   if(p.animalCount<1)return res.status(400).json({error:'Informe pelo menos um animal.'});
   if(['passeio','pet_sitter_passeio'].includes(p.service)&&p.dogCount<1)return res.status(400).json({error:'Para passeio, informe pelo menos um cão.'});
