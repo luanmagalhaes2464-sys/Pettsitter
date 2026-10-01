@@ -26,11 +26,14 @@ async function boot(){
 }
 function setDates(){$('#paymentForm [name=paidAt]').value=today();$('#expenseForm [name=occurredAt]').value=today()}
 function activateTab(name){
-  $('.tab-btn').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));
-  $('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+name));
-  if(name==='calendar'&&bookingCalendar){setTimeout(()=>{bookingCalendar.updateSize();bookingCalendar.refetchEvents()},20)}
+  $$('.tab-btn').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));
+  $$('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+name));
+  if(name==='calendar'){
+    if(!bookingCalendar)initCalendar();
+    else setTimeout(()=>{bookingCalendar.updateSize();bookingCalendar.refetchEvents()},20);
+  }
 }
-$('.tab-btn').forEach(b=>b.addEventListener('click',()=>activateTab(b.dataset.tab)));
+$$('.tab-btn').forEach(b=>b.addEventListener('click',()=>activateTab(b.dataset.tab)));
 $('#logoutBtn').addEventListener('click',async()=>{await api('/api/auth/logout',{method:'POST',body:'{}'});location.href='/login'});$('#refreshDashboard').addEventListener('click',loadDashboard);$('#dashFilterBtn').addEventListener('click',loadDashboard);
 async function loadDashboard(){
   const q=new URLSearchParams();
