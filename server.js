@@ -291,6 +291,11 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
         AND ($3::text IS NULL OR b.service=$3::text)),0) received,
       COALESCE((SELECT SUM(e.amount) FROM cps_expenses e
         WHERE ($1::date IS NULL OR e.occurred_at >= $1::date) AND ($2::date IS NULL OR e.occurred_at <= $2::date)),0) expenses,
+      COALESCE((SELECT SUM(GREATEST(COALESCE(b.estimated_total,0)-COALESCE(pp.paid,0),0))
+        FROM cps_bookings b
+        LEFT JOIN (SELECT booking_id,SUM(amount) paid FROM cps_payments WHERE booking_id IS NOT NULL GROUP BY booking_id) pp ON pp.booking_id=b.id
+        WHERE b.status='confirmed' AND ($1::date IS NULL OR b.end_date >= $1::date)
+        AND ($2::date IS NULL OR b.start_date <= $2::date) AND ($3::text IS NULL OR b.service=$3::text)),0) receivable,
       COALESCE((SELECT SUM(b.estimated_total) FROM cps_bookings b
         WHERE b.status IN ('confirmed','completed') AND ($1::date IS NULL OR b.end_date >= $1::date)
         AND ($2::date IS NULL OR b.start_date <= $2::date) AND ($3::text IS NULL OR b.service=$3::text)),0) contracted,
@@ -302,8 +307,8 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
         AND ($3::text IS NULL OR b.service=$3::text)) clients`;
   const monthSql=`
     WITH bounds AS (
-      SELECT COALESCE($1::date,(SELECT MIN(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses) dates),CURRENT_DATE)::date f,
-             COALESCE($2::date,(SELECT MAX(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses) dates),CURRENT_DATE)::date t
+      SELECT COALESCE($1::date,(SELECT MIN(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses UNION ALL SELECT start_date FROM cps_bookings WHERE status='confirmed') dates),CURRENT_DATE)::date f,
+             COALESCE($2::date,(SELECT MAX(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses UNION ALL SELECT start_date FROM cps_bookings WHERE status='confirmed') dates),CURRENT_DATE)::date t
     ), months AS (
       SELECT generate_series(date_trunc('month',f),date_trunc('month',t),interval '1 month') AS month_start FROM bounds
     ), pay AS (
@@ -314,9 +319,19 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
     ), exp AS (
       SELECT date_trunc('month',e.occurred_at) m,SUM(e.amount) expenses
       FROM cps_expenses e,bounds WHERE e.occurred_at BETWEEN bounds.f AND bounds.t GROUP BY 1
+    ), rec AS (
+      SELECT date_trunc('month',b.start_date) m,
+             SUM(GREATEST(COALESCE(b.estimated_total,0)-COALESCE(pp.paid,0),0)) receivable
+      FROM cps_bookings b
+      LEFT JOIN (SELECT booking_id,SUM(amount) paid FROM cps_payments WHERE booking_id IS NOT NULL GROUP BY booking_id) pp ON pp.booking_id=b.id,
+           bounds
+      WHERE b.status='confirmed' AND b.start_date BETWEEN bounds.f AND bounds.t
+        AND ($3::text IS NULL OR b.service=$3::text)
+      GROUP BY 1
     )
-    SELECT TO_CHAR(month_start,'YYYY-MM') AS month,COALESCE(pay.received,0) received,COALESCE(exp.expenses,0) expenses
-    FROM months LEFT JOIN pay ON pay.m=month_start LEFT JOIN exp ON exp.m=month_start ORDER BY month_start`;
+    SELECT TO_CHAR(month_start,'YYYY-MM') AS month,
+           COALESCE(pay.received,0) received,COALESCE(rec.receivable,0) receivable,COALESCE(exp.expenses,0) expenses
+    FROM months LEFT JOIN pay ON pay.m=month_start LEFT JOIN rec ON rec.m=month_start LEFT JOIN exp ON exp.m=month_start ORDER BY month_start`;
   const bookingCountSql=`
     SELECT service,COUNT(*) bookings FROM cps_bookings b
     WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
@@ -340,7 +355,7 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
   const keys=new Set([...counts.keys(),...revenues.keys()]);
   const byService=[...keys].filter(k=>k!=='unlinked').map(k=>({service:k,serviceLabel:SERVICE[k]||k,bookings:counts.get(k)||0,received:revenues.get(k)||0})).sort((a,b)=>b.received-a.received);
   if(revenues.has('unlinked'))byService.push({service:'unlinked',serviceLabel:'Recebimento sem vínculo',bookings:0,received:revenues.get('unlinked')||0});
-  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),net:Number(x.received)-Number(x.expenses),contracted:Number(x.contracted),bookings:Number(x.bookings),clients:Number(x.clients)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
+  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),receivable:Number(x.receivable),contracted:Number(x.contracted),bookings:Number(x.bookings)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),receivable:Number(v.receivable),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
 app.post('/api/admin/bookings',needAuth,needCsrf,needDb,async(req,res)=>{try{
   const parsed=adminBookingSchema.parse(req.body),resolved=resolveBookingDates(parsed),animalInfo=normalizeAnimals(parsed),p={...parsed,...resolved,animalCount:animalInfo.total,animals:animalInfo.summary};if(['hospedagem','vacinacao'].includes(p.service)){p.dateMode='range';p.specificDates=[];p.specificSchedule=[]}
