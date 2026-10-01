@@ -15,8 +15,8 @@ async function loadBookings(){
   const j=await api('/api/admin/bookings?'+q.toString());bookingsCache=j.bookings;$('#bookingsTable').innerHTML=tableBookings(j.bookings);
   $$('.status-select').forEach(s=>s.addEventListener('change',async()=>{const previous=bookingsCache.find(b=>b.id===s.dataset.id)?.status||'new';s.disabled=true;try{const result=await api('/api/admin/bookings/'+s.dataset.id,{method:'PATCH',body:JSON.stringify({status:s.value})});if(s.value==='confirmed')toast(result.calendarLinked?'Atendimento confirmado e vinculado à agenda.':'Atendimento confirmado. Autorize o Google Agenda e use o botão Agenda.',result.calendarLinked?'success':'error');if(s.value==='completed'&&result.paymentCreated)toast('Atendimento concluído e recebimento via Pix registrado.');await Promise.all([loadDashboard(),loadFinance(),loadBookings()])}catch(e){s.value=previous;s.disabled=false;toast(e.message,'error')}}));
   $$('.calendar-retry').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{await api('/api/admin/bookings/'+btn.dataset.id+'/calendar',{method:'POST',body:'{}'});toast('Atendimento vinculado à agenda de Luan e Isabela.');await loadBookings()}catch(e){toast(e.message,'error');btn.disabled=false}}));
-  $('.edit-booking').forEach(btn=>btn.addEventListener('click',()=>openBookingEditor(btn.dataset.id)));
-  $('.delete-booking').forEach(btn=>btn.addEventListener('click',()=>openDeleteDialog(btn.dataset.id)));
+  $$('.edit-booking').forEach(btn=>btn.addEventListener('click',()=>openBookingEditor(btn.dataset.id)));
+  $$('.delete-booking').forEach(btn=>btn.addEventListener('click',()=>openDeleteDialog(btn.dataset.id)));
   fillBookingSelect();
 }
 let bookingEditorId='';
