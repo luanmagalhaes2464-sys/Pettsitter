@@ -18,7 +18,6 @@ async function boot(){
     const results=await Promise.allSettled(tasks.map(([,fn])=>fn()));
     const failed=results.map((x,i)=>x.status==='rejected'?tasks[i][0]:null).filter(Boolean);
     if(failed.length)toast('Algumas áreas não carregaram: '+failed.join(', ')+'. Atualize a página.','error');
-    initCalendar();
   }catch(e){
     console.error('Boot admin:',e);
     const name=$('#userName');if(name)name.textContent='Erro ao carregar';
@@ -55,7 +54,6 @@ async function loadDashboard(){
       <div class="month-series"><span>A receber</span><div class="bar-track">${bar(x.receivable,'receivable')}</div><strong>${money.format(x.receivable)}</strong></div>
       <div class="month-series"><span>Despesas</span><div class="bar-track">${bar(x.expenses,'expense')}</div><strong>${money.format(x.expenses)}</strong></div>
     </div>`).join(''):'<div class="empty">Sem movimentação no período.</div>';
-  $('#upcomingBookings').innerHTML=j.upcoming?.length?tableBookings(j.upcoming,true):'<div class="empty">Nenhum atendimento confirmado a partir de hoje.</div>';
   $('#serviceBreakdown').innerHTML=j.byService?.length?`<table><thead><tr><th>Serviço</th><th>Atendimentos</th><th>Recebido</th></tr></thead><tbody>${j.byService.map(x=>`<tr><td>${esc(x.serviceLabel)}</td><td>${x.bookings}</td><td><strong>${money.format(x.received)}</strong></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Ainda não há recebimentos vinculados a serviços nesse período.</div>'
 }
 function tableBookings(rows,compact=false){
@@ -146,7 +144,6 @@ $('#calendarEventComplete').addEventListener('click',async()=>{
 });
 $('#calendarAddBookingBtn').addEventListener('click',()=>openBookingEditor());
 ['calendarService','calendarStatus','calendarSource'].forEach(id=>$('#'+id).addEventListener('change',refreshCalendar));
-$('#openCalendarFromDashboard').addEventListener('click',()=>activateTab('calendar'));
 
 let bookingEditorId='',adminPriceManual=false,adminSpecificDates=[],adminSpecificSchedule=[];
 const adminCountNames=['dogCount','catCount','birdCount','hamsterCount','guineaPigCount','fishCount','otherCount'];
@@ -310,4 +307,4 @@ if($('#vaccineForm'))$('#vaccineForm').addEventListener('submit',async e=>{e.pre
 
 $('#dashClearBtn').addEventListener('click',()=>{$('#dashFrom').value='';$('#dashTo').value='';$('#dashService').value='';loadDashboard()});
 
-boot();
+window.addEventListener('DOMContentLoaded',()=>boot());
