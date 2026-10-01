@@ -333,7 +333,7 @@ app.put('/api/admin/bookings/:id',needAuth,needCsrf,needDb,async(req,res)=>{try{
   if(!found.rowCount)return res.status(404).json({error:'Atendimento não encontrado.'});
   const previous=found.rows[0];
   if(previous.calendar_event_id){
-    try{await deleteCalendarEvent(previous.calendar_event_id)}catch(e){console.error('Edit booking calendar delete:',e.message);return res.status(502).json({error:'Não foi possível atualizar porque o evento atual da agenda não pôde ser removido. Verifique a integração e tente novamente.'})}
+    try{const removed=await deleteCalendarEvent(previous.calendar_event_id);if(!removed)return res.status(502).json({error:'Não foi possível atualizar porque a integração com a agenda não está disponível no momento.'})}catch(e){console.error('Edit booking calendar delete:',e.message);return res.status(502).json({error:'Não foi possível atualizar porque o evento atual da agenda não pôde ser removido. Verifique a integração e tente novamente.'})}
   }
   const priceDetail=p.estimatedTotal==null?'Valor a confirmar — editado no administrativo':'Valor informado/ajustado no administrativo';
   let row=(await pool.query('UPDATE cps_bookings SET service=$1,start_date=$2,end_date=$3,visits=$4,tutor_name=$5,phone=$6,street=$7,neighborhood=$8,animal_count=$9,animals=$10,notes=$11,estimated_total=$12,price_detail=$13,source=$14,calendar_event_id=NULL,updated_at=NOW() WHERE id=$15 RETURNING *',[p.service,p.startDate,p.endDate,p.visits,p.tutorName,p.phone,p.street,p.neighborhood,p.animalCount,p.animals,p.notes,p.estimatedTotal,priceDetail,p.source,req.params.id])).rows[0];
