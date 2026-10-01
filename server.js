@@ -23,7 +23,7 @@ const DB = process.env.DATABASE_URL || '';
 const pool = new Pool({ connectionString: DB || undefined, ssl: DB && !DB.includes('localhost') ? { rejectUnauthorized: false } : undefined, max: 10 });
 
 app.set('trust proxy', 1);
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc:["'self'"], scriptSrc:["'self'"], styleSrc:["'self'"], imgSrc:["'self'",'data:'], connectSrc:["'self'"], objectSrc:["'none'"], frameAncestors:["'none'"] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc:["'self'"], scriptSrc:["'self'"], styleSrc:["'self'","'unsafe-inline'"], imgSrc:["'self'",'data:'], connectSrc:["'self'"], objectSrc:["'none'"], frameAncestors:["'none'"] } } }));
 app.use(express.json({ limit: '80kb' }));
 app.use(express.urlencoded({ extended: false, limit: '80kb' }));
 const PgStore = connectPgSimple(session);
