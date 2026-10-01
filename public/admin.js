@@ -19,32 +19,83 @@ async function loadBookings(){
   $$('.delete-booking').forEach(btn=>btn.addEventListener('click',()=>openDeleteDialog(btn.dataset.id)));
   fillBookingSelect();
 }
-let bookingEditorId='';
+let bookingEditorId='',adminPriceManual=false;
+const adminCountNames=['dogCount','catCount','birdCount','hamsterCount','guineaPigCount','fishCount','otherCount'];
 function setBookingEditorField(name,value){const el=$('#bookingEditorForm [name="'+name+'"]');if(el)el.value=value==null?'':value}
+function adminCount(name){return Math.max(0,Number($('#bookingEditorForm [name="'+name+'"]')?.value||0))}
+function adminDate(v){return v?new Date(v+'T12:00:00'):null}
+function adminInclusiveDays(a,b){if(!a||!b||b<a)return 0;return Math.floor((b-a)/86400000)+1}
+function adminStayDays(a,b){if(!a||!b||b<a)return 0;return Math.max(1,Math.ceil((b-a)/86400000))}
+function parseAnimalSummary(summary,total=0){
+  const s=String(summary||''),pick=re=>Number(s.match(re)?.[1]||0);
+  const result={
+    dogCount:pick(/(\d+)\s+cão/i),catCount:pick(/(\d+)\s+gato/i),birdCount:pick(/(\d+)\s+ave/i),
+    hamsterCount:pick(/(\d+)\s+hamster/i),guineaPigCount:pick(/(\d+)\s+porquinho/i),fishCount:pick(/(\d+)\s+peixe/i),
+    otherCount:0,otherAnimals:'',petNames:(s.match(/—\s*nomes:\s*(.+)$/i)?.[1]||'').trim()
+  };
+  const known=result.dogCount+result.catCount+result.birdCount+result.hamsterCount+result.guineaPigCount+result.fishCount;
+  if(!known&&Number(total)>0){result.otherCount=Number(total);result.otherAnimals=s.replace(/—\s*nomes:.*$/i,'').trim()||'outro(s)'}
+  else if(Number(total)>known){result.otherCount=Number(total)-known;result.otherAnimals='outro(s)'}
+  return result;
+}
+function updateAdminServiceFields(){
+  const form=$('#bookingEditorForm'),service=form.elements.service.value,needsVisits=['pet_sitter','pet_sitter_passeio'].includes(service),needsAddress=service!=='hospedagem';
+  $('#adminVisitsWrap').hidden=!needsVisits;form.elements.visits.required=needsVisits;if(!needsVisits)form.elements.visits.value=1;
+  $('#adminAddressFields').hidden=!needsAddress;form.elements.street.required=needsAddress;form.elements.neighborhood.required=needsAddress;
+  $('#adminAddressHint').textContent=service==='hospedagem'?'Hospedagem: não é necessário informar o endereço do tutor.':'';
+}
+function calculateAdminPrice(force=false){
+  updateAdminServiceFields();
+  const form=$('#bookingEditorForm'),service=form.elements.service.value,start=adminDate(form.elements.startDate.value),end=adminDate(form.elements.endDate.value),visits=Math.max(1,Number(form.elements.visits.value||1));
+  const dogs=adminCount('dogCount'),cats=adminCount('catCount'),small=adminCount('birdCount')+adminCount('hamsterCount')+adminCount('guineaPigCount')+adminCount('fishCount')+adminCount('otherCount');
+  const days=adminInclusiveDays(start,end);let total=null,detail='Selecione serviço e datas.';
+  if(start&&end&&end<start)detail='A data final precisa ser igual ou posterior à inicial.';
+  else if(service&&start&&end){
+    if(service==='pet_sitter'){total=days*visits*35;detail=days+' dia(s) × '+visits+' visita(s)/dia × R$ 35 — sem acréscimo por quantidade de animais'}
+    else if(service==='pet_sitter_passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{const rate=35+(15*dogs);total=days*visits*rate;detail=days+' dia(s) × '+visits+' visita(s)/dia × (R$ 35 + R$ 15 × '+dogs+' cão(ães))'}}
+    else if(service==='passeio'){if(!dogs)detail='Informe ao menos um cão para calcular o passeio.';else{total=days*dogs*50;detail=days+' passeio(s) × '+dogs+' cão(ães) × R$ 50'}}
+    else if(service==='hospedagem'){const d=adminStayDays(start,end),billable=dogs+cats,known=d*billable*65;if(small||!billable){detail=(billable?d+' diária(s) × '+billable+' cão/gato × R$ 65 = '+money.format(known)+'; ':'')+'demais animais: valor a validar'}else{total=known;detail=d+' diária(s) × '+billable+' cão/gato × R$ 65'}}
+    else if(service==='vacinacao')detail='Valor definido após avaliação do protocolo e da vacina indicada.';
+  }
+  if(force)adminPriceManual=false;
+  if(!adminPriceManual)$('#adminEstimatedTotal').value=total==null?'':Number(total).toFixed(2);
+  $('#adminPriceDetail').textContent=adminPriceManual?'Valor ajustado manualmente. Clique em “Usar valor automático” para recalcular.':detail;
+  return{total,detail};
+}
 function openBookingEditor(id=''){
   const dialog=$('#bookingEditorDialog'),form=$('#bookingEditorForm'),msg=$('#bookingEditorMessage');
-  bookingEditorId=id;form.reset();msg.className='form-message';msg.textContent='';
-  setBookingEditorField('source','whatsapp');setBookingEditorField('status','new');setBookingEditorField('visits','1');setBookingEditorField('animalCount','1');setBookingEditorField('startDate',today());setBookingEditorField('endDate',today());
+  bookingEditorId=id;adminPriceManual=false;form.reset();msg.className='form-message';msg.textContent='';
+  setBookingEditorField('source','whatsapp');setBookingEditorField('status','new');setBookingEditorField('service','pet_sitter');setBookingEditorField('visits','1');setBookingEditorField('startDate',today());setBookingEditorField('endDate',today());
+  adminCountNames.forEach(name=>setBookingEditorField(name,0));setBookingEditorField('otherAnimals','');setBookingEditorField('petNames','');
   const editing=Boolean(id),b=editing?bookingsCache.find(x=>x.id===id):null;
   $('#bookingEditorTitle').textContent=editing?'Editar atendimento':'Novo atendimento';
-  $('#bookingEditorSubtitle').textContent=editing?'Corrija os dados da solicitação. O status continua sendo gerenciado na tabela.':'Cadastre uma solicitação recebida por WhatsApp, Instagram, telefone ou presencialmente.';
+  $('#bookingEditorSubtitle').textContent=editing?'Corrija os dados da solicitação. Os campos mudam conforme o serviço e o valor segue a mesma regra do site.':'Cadastre uma solicitação recebida fora do site. Os campos e o valor se ajustam conforme o serviço.';
   $('#bookingEditorStatusWrap').hidden=editing;
-  $('#bookingEditorHint').textContent=editing?'Se este atendimento já estiver na agenda, o sistema tentará atualizar o evento. Alterar o valor de um atendimento concluído não altera pagamentos já lançados.':'Ao criar como Confirmada, o sistema tentará vinculá-la à agenda. Ao criar como Concluída com valor, o recebimento será registrado conforme a regra atual do financeiro.';
+  $('#bookingEditorHint').textContent=editing?'Se este atendimento já estiver na agenda, o sistema tentará atualizar o evento. Pagamentos já lançados não são alterados automaticamente.':'Ao criar como Confirmada, o sistema tentará vinculá-la à agenda. Ao criar como Concluída com valor, o recebimento será registrado conforme a regra atual do financeiro.';
   if(b){
     setBookingEditorField('source',b.source||'site');setBookingEditorField('service',b.service);setBookingEditorField('visits',b.visits||1);
     setBookingEditorField('startDate',String(b.startDate||'').slice(0,10));setBookingEditorField('endDate',String(b.endDate||'').slice(0,10));
-    setBookingEditorField('tutorName',b.tutorName);setBookingEditorField('phone',b.phone);setBookingEditorField('street',b.street);setBookingEditorField('neighborhood',b.neighborhood);
-    setBookingEditorField('animalCount',b.animalCount||1);setBookingEditorField('animals',b.animals);setBookingEditorField('estimatedTotal',b.estimatedTotal==null?'':b.estimatedTotal);setBookingEditorField('notes',b.notes||'');
+    setBookingEditorField('tutorName',b.tutorName);setBookingEditorField('phone',b.phone);setBookingEditorField('street',b.service==='hospedagem'?'':b.street);setBookingEditorField('neighborhood',b.service==='hospedagem'?'':b.neighborhood);
+    const parsed=parseAnimalSummary(b.animals,b.animalCount);Object.entries(parsed).forEach(([name,value])=>setBookingEditorField(name,value));
+    setBookingEditorField('estimatedTotal',b.estimatedTotal==null?'':b.estimatedTotal);setBookingEditorField('notes',b.notes||'');
+    adminPriceManual=/ajustado manualmente|valor informado|registro administrativo|editado no administrativo/i.test(String(b.priceDetail||''));
   }
+  updateAdminServiceFields();
+  if(!adminPriceManual)calculateAdminPrice();else $('#adminPriceDetail').textContent='Valor ajustado manualmente. Clique em “Usar valor automático” para recalcular.';
   dialog.showModal();
 }
 $('#addBookingBtn').addEventListener('click',()=>openBookingEditor());
 $('#closeBookingEditor').addEventListener('click',()=>$('#bookingEditorDialog').close());
 $('#cancelBookingEditor').addEventListener('click',()=>$('#bookingEditorDialog').close());
+$('#adminResetPrice').addEventListener('click',()=>calculateAdminPrice(true));
+$('#adminEstimatedTotal').addEventListener('input',()=>{adminPriceManual=true;$('#adminPriceDetail').textContent='Valor ajustado manualmente. Clique em “Usar valor automático” para recalcular.'});
+['service','visits','startDate','endDate',...adminCountNames].forEach(name=>$('#bookingEditorForm [name="'+name+'"]')?.addEventListener('input',()=>calculateAdminPrice()));
+$('#bookingEditorForm [name="service"]').addEventListener('change',()=>calculateAdminPrice());
 $('#bookingEditorForm').addEventListener('submit',async e=>{
   e.preventDefault();const form=e.currentTarget,btn=$('#saveBookingEditor'),msg=$('#bookingEditorMessage'),payload=fd(form);
-  payload.visits=Number(payload.visits||1);payload.animalCount=Number(payload.animalCount||1);payload.estimatedTotal=payload.estimatedTotal===''?null:Number(payload.estimatedTotal);
-  delete payload.sourceNote;if(bookingEditorId)delete payload.status;
+  payload.visits=Number(payload.visits||1);adminCountNames.forEach(name=>payload[name]=Number(payload[name]||0));
+  payload.estimatedTotal=payload.estimatedTotal===''?null:Number(payload.estimatedTotal);payload.autoPrice=!adminPriceManual;
+  if(bookingEditorId)delete payload.status;
   btn.disabled=true;msg.className='form-message';msg.textContent='Salvando...';
   try{
     const result=await api(bookingEditorId?'/api/admin/bookings/'+bookingEditorId:'/api/admin/bookings',{method:bookingEditorId?'PUT':'POST',body:JSON.stringify(payload)});
@@ -55,7 +106,7 @@ $('#bookingEditorForm').addEventListener('submit',async e=>{
     await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);
   }catch(err){msg.className='form-message error';msg.textContent=err.message}finally{btn.disabled=false}
 });
-$('#bookingEditorDialog').addEventListener('close',()=>{bookingEditorId='';$('#bookingEditorMessage').textContent='';});
+$('#bookingEditorDialog').addEventListener('close',()=>{bookingEditorId='';adminPriceManual=false;$('#bookingEditorMessage').textContent='';});
 
 let bookingToDelete='';
 function openDeleteDialog(id){const booking=bookingsCache.find(b=>b.id===id);bookingToDelete=id;$('#deleteBookingText').textContent=`O registro de ${booking?.tutorName||'este tutor'} será removido permanentemente${booking?.calendarLinked?' e o evento correspondente será excluído da agenda.':'.'}`;$('#deleteBookingDialog').showModal()}
