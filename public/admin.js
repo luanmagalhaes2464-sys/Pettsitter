@@ -18,12 +18,13 @@ async function loadDashboard(){
   $('#mBookings').textContent=j.summary.bookings;
   $('#recentBookings').innerHTML=tableBookings(j.recent,true);
   const max=Math.max(1,...j.monthly.map(x=>Math.max(x.received,x.receivable,x.expenses)));
+  const bar=(value,cls)=>value>0?'<i class="bar '+cls+'" style="width:'+Math.min(100,value/max*100)+'%"></i>':'';
   $('#monthlyChart').innerHTML=j.monthly.length?j.monthly.map(x=>`
     <div class="month-group">
       <div class="month-title">${esc(x.month.slice(5))}/${esc(x.month.slice(2,4))}</div>
-      <div class="month-series"><span>Recebido</span><div class="bar-track"><i class="bar received" style="width:${x.received/max*100}%"></i></div><strong>${money.format(x.received)}</strong></div>
-      <div class="month-series"><span>A receber</span><div class="bar-track"><i class="bar receivable" style="width:${x.receivable/max*100}%"></i></div><strong>${money.format(x.receivable)}</strong></div>
-      <div class="month-series"><span>Despesas</span><div class="bar-track"><i class="bar expense" style="width:${x.expenses/max*100}%"></i></div><strong>${money.format(x.expenses)}</strong></div>
+      <div class="month-series"><span>Recebido</span><div class="bar-track">${bar(x.received,'received')}</div><strong>${money.format(x.received)}</strong></div>
+      <div class="month-series"><span>A receber</span><div class="bar-track">${bar(x.receivable,'receivable')}</div><strong>${money.format(x.receivable)}</strong></div>
+      <div class="month-series"><span>Despesas</span><div class="bar-track">${bar(x.expenses,'expense')}</div><strong>${money.format(x.expenses)}</strong></div>
     </div>`).join(''):'<div class="empty">Sem movimentação no período.</div>';
   $('#serviceBreakdown').innerHTML=j.byService?.length?`<table><thead><tr><th>Serviço</th><th>Atendimentos</th><th>Recebido</th></tr></thead><tbody>${j.byService.map(x=>`<tr><td>${esc(x.serviceLabel)}</td><td>${x.bookings}</td><td><strong>${money.format(x.received)}</strong></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Ainda não há recebimentos vinculados a serviços nesse período.</div>'
 }
