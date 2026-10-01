@@ -66,3 +66,12 @@ body{overflow-x:hidden}.topbar{box-shadow:0 8px 28px rgba(75,51,31,.04)}
 .admin-price-actions{display:grid;gap:8px}.admin-price-actions label{margin:0}.admin-price-actions .btn{justify-self:start}
 .booking-editor-dialog [hidden]{display:none!important}
 @media(max-width:760px){.admin-price-box{grid-template-columns:1fr}.admin-pet-count-grid{grid-template-columns:repeat(2,1fr)}}
+
+.specific-date-box{padding:14px;border:1px solid var(--line);border-radius:14px;background:#fbf8f4;margin:8px 0 12px}
+.specific-date-add{align-self:end;margin-bottom:12px}
+.date-chip-list{display:flex;flex-wrap:wrap;gap:8px;min-height:34px;align-items:center}
+.date-chip{border:1px solid #dcc9b5;background:#fff;color:#533822;border-radius:999px;padding:7px 10px;font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.date-chip span{margin-left:7px;color:#9a4944}
+.form-inline-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.finance-actions{min-width:120px}
+@media(max-width:760px){.specific-date-add{width:100%}.date-chip{font-size:11px}}
