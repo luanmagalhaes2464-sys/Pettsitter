@@ -19,7 +19,12 @@ jobs:
           node --check public/app.js
           node --check scripts/build-static.mjs
           node --check scripts/test-static-build.mjs
+          node --check scripts/test-cors.mjs
       - name: Gerar e conferir site estatico
         run: |
           node scripts/build-static.mjs
           node scripts/test-static-build.mjs
+      - name: Verificar permissoes de origem do backend
+        run: |
+          npm ci
+          node scripts/test-cors.mjs
