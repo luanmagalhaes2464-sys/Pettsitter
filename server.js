@@ -26,6 +26,23 @@ app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc:["'self'"], scriptSrc:["'self'"], styleSrc:["'self'","'unsafe-inline'"], imgSrc:["'self'",'data:'], connectSrc:["'self'"], objectSrc:["'none'"], frameAncestors:["'none'"] } } }));
 app.use(express.json({ limit: '80kb' }));
 app.use(express.urlencoded({ extended: false, limit: '80kb' }));
+// Permite apenas ao site público estático enviar pré-solicitações ao backend.
+// Não habilitar CORS global: login, sessões e área administrativa ficam na origem do servidor.
+const publicSiteOrigins = new Set((process.env.PUBLIC_SITE_ORIGINS || 'https://casal-pet-sitter-site.onrender.com')
+  .split(',').map(origin => origin.trim().replace(/\/+$/, '')).filter(Boolean));
+app.use('/api/bookings', (req, res, next) => {
+  const origin = req.get('origin');
+  res.vary('Origin');
+  const allowed = Boolean(origin && publicSiteOrigins.has(origin));
+  if (allowed) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Accept');
+    res.set('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(allowed ? 204 : 403);
+  next();
+});
 const PgStore = connectPgSimple(session);
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.createHash('sha256').update('casal-pet-sitter-session:'+DB).digest('hex');
 app.use(session({ store: DB ? new PgStore({ pool, tableName:'cps_session', createTableIfMissing:true }) : undefined, secret:SESSION_SECRET, resave:false, saveUninitialized:false, name:'cps.sid', cookie:{ httpOnly:true, secure:PROD, sameSite:'lax', maxAge:12*60*60*1000 } }));
