@@ -11,3 +11,7 @@ services:
         value: https://casal-pet-sitter.onrender.com
       - key: PUBLIC_SITE_ORIGIN
         value: https://casal-pet-sitter-site.onrender.com
+    routes:
+      - type: redirect
+        source: /privacidade
+        destination: /privacy.html
