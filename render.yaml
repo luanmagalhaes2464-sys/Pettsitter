@@ -1,0 +1,17 @@
+# Cria APENAS o novo site público. O Web Service atual não é alterado pelo Blueprint.
+# Após a criação do Static Site, confirme a URL emitida pelo Render.
+services:
+  - type: web
+    name: casal-pet-sitter-site
+    runtime: static
+    buildCommand: node scripts/build-static.mjs
+    staticPublishPath: ./dist-static
+    envVars:
+      - key: CPS_API_BASE
+        value: https://casal-pet-sitter.onrender.com
+      - key: PUBLIC_SITE_ORIGIN
+        value: https://casal-pet-sitter-site.onrender.com
+    routes:
+      - type: redirect
+        source: /privacidade
+        destination: /privacy.html

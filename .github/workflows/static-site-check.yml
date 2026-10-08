@@ -1,0 +1,30 @@
+name: Validar site estatico Pet Sitter
+
+on:
+  push:
+    branches: [main, feature/static-public-site-render-2026-10]
+  pull_request:
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validar sintaxe JavaScript
+        run: |
+          node --check server.js
+          node --check public/app.js
+          node --check scripts/build-static.mjs
+          node --check scripts/test-static-build.mjs
+          node --check scripts/test-cors.mjs
+      - name: Gerar e conferir site estatico
+        run: |
+          node scripts/build-static.mjs
+          node scripts/test-static-build.mjs
+      - name: Verificar permissoes de origem do backend
+        run: |
+          npm install --no-save --package-lock=false --no-audit --no-fund
+          node scripts/test-cors.mjs
