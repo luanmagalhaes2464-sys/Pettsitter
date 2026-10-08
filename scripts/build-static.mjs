@@ -42,7 +42,9 @@ writeFileSync(join(outputDir, 'index.html'), html);
 writeFileSync(join(outputDir, 'config.js'), 'window.CPS_API_BASE = ' + JSON.stringify(backendOrigin) + ';\n');
 for (const file of ['robots.txt', 'sitemap.xml']) {
   const dest = join(outputDir, file);
-  writeFileSync(dest, readFileSync(dest, 'utf8').replaceAll(OLD_SITE, siteOrigin));
+  let content = readFileSync(dest, 'utf8').replaceAll(OLD_SITE, siteOrigin);
+  if (file === 'sitemap.xml') content = content.replaceAll(siteOrigin + '/privacidade', siteOrigin + '/privacy.html');
+  writeFileSync(dest, content);
 }
 console.log('Site público gerado:', outputDir);
 console.log('Frontend:', siteOrigin, '| Agendamentos e painel:', backendOrigin);
