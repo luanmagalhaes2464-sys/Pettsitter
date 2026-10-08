@@ -26,5 +26,5 @@ jobs:
           node scripts/test-static-build.mjs
       - name: Verificar permissoes de origem do backend
         run: |
-          npm ci
+          npm install --no-save --package-lock=false --no-audit --no-fund
           node scripts/test-cors.mjs
