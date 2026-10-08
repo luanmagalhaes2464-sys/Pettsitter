@@ -11,11 +11,11 @@ const app = read('app.js');
 assert.match(html, /<script src="\/config\.js"><\/script>/);
 assert.match(html, /https:\/\/casal-pet-sitter\.onrender\.com\/login/);
 assert.match(html, /href="\/privacy\.html"/);
-assert.match(html, /href="\/images\/casal-pet-sitter\.jpeg"/);
+assert.match(html, /src="\/images\/casal-pet-sitter\.jpeg"/);
 assert.doesNotMatch(html, /href="\/login"/);
 assert.match(config, /window\.CPS_API_BASE = "https:\/\/casal-pet-sitter\.onrender\.com";/);
 assert.match(app, /bookingApiBase \+ '\/api\/bookings'/);
-assert.match(read('sitemap.xml'), /casal-pet-sitter-site\.onrender\.com/);
+assert.match(read('sitemap.xml'), /casal-pet-sitter-site\.onrender\.com\/privacy\.html/);
 for (const name of ['admin.html', 'admin.js', 'setup.html', 'setup.js', 'login.html', 'login.js', '.env.example', 'server.js']) {
   assert.equal(existsSync(join(out, name)), false, name + ' não deve ser publicado no site estático');
 }
