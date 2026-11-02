@@ -142,3 +142,7 @@ body{overflow-x:hidden}.topbar{box-shadow:0 8px 28px rgba(75,51,31,.04)}
 .bar-empty{width:100%;height:9px;border-radius:999px;background:#eef0ed}
 @media(max-width:900px){.calendar-filters{grid-template-columns:1fr 1fr}.admin-page .fc .fc-toolbar{align-items:flex-start}.admin-page .fc .fc-toolbar-chunk:last-child{width:100%}}
 @media(max-width:620px){.calendar-filters{grid-template-columns:1fr}.calendar-card{padding:12px!important}.admin-page .fc .fc-toolbar{display:grid;grid-template-columns:1fr}.admin-page .fc .fc-toolbar-chunk{display:flex;justify-content:center;flex-wrap:wrap}.admin-page .fc .fc-daygrid-day-frame{min-height:70px}.calendar-event-details{grid-template-columns:1fr}.panel-section-head{align-items:flex-start;flex-direction:column}}
+
+/* Valores operacionais por mês de execução */
+.month-work-detail{display:flex;justify-content:space-between;align-items:center;gap:8px 18px;flex-wrap:wrap;margin-top:8px;font-size:.86rem}
+.month-work-detail strong{font-weight:700}

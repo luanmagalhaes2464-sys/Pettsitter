@@ -1,4 +1,4 @@
-let csrf='',bookingsCache=[],financeCache={payments:[],expenses:[]},editingPaymentId='',editingExpenseId='',bookingCalendar=null,calendarEventBooking=null;const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}),dateFmt=new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'});const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);function esc(v=''){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}function fd(form){return Object.fromEntries(new FormData(form).entries())}function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+let csrf='',bookingsCache=[],clientsCache=[],financeCache={payments:[],expenses:[]},editingPaymentId='',editingExpenseId='',bookingCalendar=null,calendarEventBooking=null;const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}),dateFmt=new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'});const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);function esc(v=''){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}function fd(form){return Object.fromEntries(new FormData(form).entries())}function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 async function api(url,opt={}){opt.headers={...(opt.headers||{}),'Content-Type':'application/json'};if(!['GET','HEAD'].includes((opt.method||'GET').toUpperCase()))opt.headers['x-csrf-token']=csrf;const r=await fetch(url,opt);if(r.status===401){location.href='/login';throw new Error('Sessão expirada')}const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Erro na solicitação');return j}
 async function boot(){
   try{
@@ -11,6 +11,7 @@ async function boot(){
     const tasks=[
       ['dashboard',loadDashboard],
       ['atendimentos',loadBookings],
+       ['pessoas',loadClients],
       ['vacinas',loadVaccines],
       ['financeiro',loadFinance],
       ['integrações',loadIntegrations]
@@ -28,6 +29,7 @@ function setDates(){$('#paymentForm [name=paidAt]').value=today();$('#expenseFor
 function activateTab(name){
   $$('.tab-btn').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));
   $$('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+name));
+  if(name==='clients')loadClients().catch(e=>toast(e.message,'error'));
   if(name==='calendar'){
     if(!bookingCalendar)initCalendar();
     else setTimeout(()=>{bookingCalendar.updateSize();bookingCalendar.refetchEvents()},20);
@@ -48,17 +50,49 @@ async function loadDashboard(){
   $('#mContracted').textContent=money.format(j.summary.contracted);
   $('#mBookings').textContent=j.summary.bookings;
   $('#recentBookings').innerHTML=tableBookings(j.recent,true);
-  const max=Math.max(1,...j.monthly.map(x=>Math.max(x.received,x.receivable,x.expenses)));
-  const bar=(value,cls)=>value>0?'<progress class="bar-progress '+cls+'" max="'+max+'" value="'+value+'"></progress>':'<div class="bar-empty"></div>';
+  const max=Math.max(1,...j.monthly.map(x=>x.units));
+  const bar=n=>n>0?'<progress class="bar-progress received" max="'+max+'" value="'+n+'"></progress>':'<div class="bar-empty"></div>';
   $('#monthlyChart').innerHTML=j.monthly.length?j.monthly.map(x=>`
-    <div class="month-group">
-      <div class="month-title">${esc(x.month.slice(5))}/${esc(x.month.slice(2,4))}</div>
-      <div class="month-series"><span>Recebido</span><div class="bar-track">${bar(x.received,'received')}</div><strong>${money.format(x.received)}</strong></div>
-      <div class="month-series"><span>A receber</span><div class="bar-track">${bar(x.receivable,'receivable')}</div><strong>${money.format(x.receivable)}</strong></div>
-      <div class="month-series"><span>Despesas</span><div class="bar-track">${bar(x.expenses,'expense')}</div><strong>${money.format(x.expenses)}</strong></div>
-    </div>`).join(''):'<div class="empty">Sem movimentação no período.</div>';
+   <div class="month-group"><div class="month-title">${esc(x.month.slice(5))}/${esc(x.month.slice(2,4))}</div>
+   <div class="month-series"><span>Visitas / diárias</span><div class="bar-track">${bar(x.units)}</div><strong>${x.units}</strong></div>
+   <div class="month-work-detail"><span>${x.bookings} atendimento(s)</span><strong>${money.format(x.value)} em serviços</strong></div>
+   </div>`).join(''):'<div class="empty">Nenhum atendimento concluído no período.</div>';
   $('#serviceBreakdown').innerHTML=j.byService?.length?`<table><thead><tr><th>Serviço</th><th>Atendimentos</th><th>Recebido</th></tr></thead><tbody>${j.byService.map(x=>`<tr><td>${esc(x.serviceLabel)}</td><td>${x.bookings}</td><td><strong>${money.format(x.received)}</strong></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Ainda não há recebimentos vinculados a serviços nesse período.</div>'
 }
+
+async function loadClients(){
+ const j=await api('/api/admin/clients');
+ clientsCache=j.clients||[];
+ renderClients();fillClientSelect();
+}
+function renderClients(){
+ const search=String($('#clientSearch').value||'').toLocaleLowerCase('pt-BR').trim();
+ const rows=clientsCache.filter(c=>[c.name,c.phone,c.animals].some(x=>String(x||'').toLocaleLowerCase('pt-BR').includes(search)));
+ const host=$('#clientsTable');
+ host.innerHTML=rows.length?`<table><thead><tr><th>Cliente</th><th>Animais</th><th>Atendimentos</th><th>Último serviço</th><th>Atalhos</th></tr></thead><tbody>${rows.map(c=>`<tr><td><strong>${esc(c.name)}</strong><small>${esc(c.phone)}</small><small>${esc([c.street,c.neighborhood].filter(Boolean).join(' • '))}</small></td><td>${esc(c.animals||'—')}</td><td>${c.bookings}</td><td>${c.lastService?dateFmt.format(new Date(String(c.lastService).slice(0,10)+'T12:00:00Z')):'—'}</td><td><button class="btn btn-small btn-ghost client-quick-book" data-id="${esc(c.id)}" type="button">+ Atendimento</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Sem pessoas encontradas.</div>';
+ host.querySelectorAll('.client-quick-book').forEach(btn=>btn.addEventListener('click',()=>{
+  const c=clientsCache.find(x=>x.id===btn.dataset.id);
+  if(c)openBookingEditor('','',null,c);
+ }));
+}
+function fillClientSelect(){
+ const input=$('#bookingClientSelect'),previous=input.value;
+ input.innerHTML='<option value="">Novo tutor — preencher dados</option>'+clientsCache.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} • ${esc(c.phone)}${c.animals?' • '+esc(c.animals):''}</option>`).join('');
+ if(clientsCache.some(c=>c.id===previous))input.value=previous;
+}
+function applyClientToBooking(c){
+ [['tutorName',c.name],['phone',c.phone],['street',c.street],['neighborhood',c.neighborhood]].forEach(([key,v])=>setBookingEditorField(key,v));
+ Object.entries(parseAnimalSummary(c.animals,c.animalCount)).forEach(([key,v])=>setBookingEditorField(key,v));
+ $('#bookingClientSelect').value=c.id;
+ calculateAdminPrice();
+}
+$('#clientSearch').addEventListener('input',renderClients);
+$('#clientNewBookingBtn').addEventListener('click',()=>openBookingEditor());
+$('#bookingClientSelect').addEventListener('change',e=>{
+ const found=clientsCache.find(c=>c.id===e.target.value);
+ if(found)applyClientToBooking(found);
+});
+
 function tableBookings(rows,compact=false){
   if(!rows.length)return'<div class="empty">Nenhum atendimento encontrado.</div>';
   return`<table><thead><tr><th>Tutor</th><th>Serviço</th><th>Data</th><th>Valor</th><th>Status</th>${compact?'':'<th>Gerenciar</th>'}</tr></thead><tbody>${rows.map(b=>`<tr><td><strong>${esc(b.tutorName)}</strong><small>${esc(b.animals||'')}</small><small><a target="_blank" rel="noreferrer" href="https://wa.me/${String(b.phone||'').replace(/\D/g,'').replace(/^(?!55)(\d{10,11})$/,'55$1')}">${esc(b.phone||'')}</a></small></td><td>${esc(b.serviceLabel)}<small>Origem: ${esc(b.sourceLabel||'Site')}</small></td><td>${esc(bookingDateText(b))}</td><td>${b.estimatedTotal==null?'A confirmar':money.format(b.estimatedTotal)}</td><td><span class="status ${esc(b.status)}">${esc(b.statusLabel)}</span>${b.calendarLinked?'<small class="calendar-ok">Na agenda</small>':''}</td>${compact?'':`<td><div class="row-actions"><select class="status-select" data-id="${b.id}" aria-label="Alterar status de ${esc(b.tutorName)}"><option value="new" ${b.status==='new'?'selected':''}>Nova</option><option value="analyzing" ${b.status==='analyzing'?'selected':''}>Em análise</option><option value="confirmed" ${b.status==='confirmed'?'selected':''}>Confirmada</option><option value="completed" ${b.status==='completed'?'selected':''}>Concluída</option><option value="cancelled" ${b.status==='cancelled'?'selected':''}>Cancelada</option></select>${['confirmed','completed'].includes(b.status)&&!b.calendarLinked?`<button class="btn-icon calendar-retry" data-id="${b.id}" title="Vincular à agenda" aria-label="Vincular ${esc(b.tutorName)} à agenda">Agenda</button>`:''}<button class="btn-icon edit-booking" data-id="${b.id}" title="Editar atendimento" aria-label="Editar atendimento de ${esc(b.tutorName)}">Editar</button><button class="btn-icon danger delete-booking" data-id="${b.id}" title="Excluir atendimento" aria-label="Excluir atendimento de ${esc(b.tutorName)}">Excluir</button></div></td>`}</tr>`).join('')}</tbody></table>`
@@ -199,7 +233,7 @@ function calculateAdminPrice(force=false){
   $('#adminPriceDetail').textContent=adminPriceManual?'Valor ajustado manualmente. Clique em “Usar valor automático” para recalcular.':detail;
   return{total,detail};
 }
-function openBookingEditor(id='',presetDate='',seed=null){
+function openBookingEditor(id='',presetDate='',seed=null,presetClient=null){
   const dialog=$('#bookingEditorDialog'),form=$('#bookingEditorForm'),msg=$('#bookingEditorMessage');
   bookingEditorId=id;adminPriceManual=false;adminSpecificDates=[];adminSpecificSchedule=[];form.reset();msg.className='form-message';msg.textContent='';
   setBookingEditorField('source','whatsapp');setBookingEditorField('status','new');setBookingEditorField('service','pet_sitter');setBookingEditorField('dateMode','range');setBookingEditorField('visits','1');setBookingEditorField('startDate',presetDate||today());setBookingEditorField('endDate',presetDate||today());
@@ -217,6 +251,8 @@ function openBookingEditor(id='',presetDate='',seed=null){
     setBookingEditorField('estimatedTotal',b.estimatedTotal==null?'':b.estimatedTotal);setBookingEditorField('notes',b.notes||'');
     adminPriceManual=/ajustado manualmente|valor informado|registro administrativo|editado no administrativo/i.test(String(b.priceDetail||''));
   }
+  if(presetClient)applyClientToBooking(presetClient);
+  else if(b){const found=clientsCache.find(c=>c.phone.replace(/\D/g,'')===String(b.phone||'').replace(/\D/g,''));if(found)$('#bookingClientSelect').value=found.id;}
   renderAdminSpecificDates();updateAdminServiceFields();
   if(!adminPriceManual)calculateAdminPrice();else $('#adminPriceDetail').textContent='Valor ajustado manualmente. Clique em “Usar valor automático” para recalcular.';
   dialog.showModal();
@@ -246,6 +282,7 @@ $('#bookingEditorForm').addEventListener('submit',async e=>{
     else if(!wasEdit&&payload.status==='confirmed'&&!result.calendarLinked)toast('Atendimento criado e confirmado. A agenda não foi vinculada automaticamente.','error');
     else toast(wasEdit?'Atendimento atualizado.':'Atendimento adicionado.');
     await Promise.all([loadDashboard(),loadFinance(),loadBookings()]);
+    loadClients().catch(console.error);
   }catch(err){msg.className='form-message error';msg.textContent=err.message}finally{btn.disabled=false}
 });
 $('#bookingEditorDialog').addEventListener('close',()=>{bookingEditorId='';adminPriceManual=false;adminSpecificDates=[];adminSpecificSchedule=[];$('#bookingEditorMessage').textContent='';});

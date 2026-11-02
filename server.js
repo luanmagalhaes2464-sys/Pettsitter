@@ -299,6 +299,48 @@ app.get('/api/auth/me',needAuth,needDb,async(req,res)=>{const q=await pool.query
 app.post('/api/auth/logout',needAuth,needCsrf,(req,res)=>req.session.destroy(()=>{res.clearCookie('cps.sid');res.json({ok:true})}));
 app.post('/api/auth/change-password',needAuth,needCsrf,needDb,async(req,res)=>{const current=String(req.body.currentPassword||''),next=String(req.body.newPassword||'');if(next.length<10)return res.status(400).json({error:'A nova senha deve ter pelo menos 10 caracteres.'});const q=await pool.query('SELECT password_hash FROM cps_users WHERE id=$1',[req.session.userId]);if(!q.rowCount||!(await bcrypt.compare(current,q.rows[0].password_hash)))return res.status(400).json({error:'Senha atual incorreta.'});await pool.query('UPDATE cps_users SET password_hash=$1,updated_at=NOW() WHERE id=$2',[await bcrypt.hash(next,12),req.session.userId]);await audit(req,'change_password','user',req.session.userId);res.json({ok:true});});
 
+
+function workByMonth(orders,from,to){
+ const result=new Map();
+ for(const b of orders){
+  const first=String(b.start_date).slice(0,10),last=String(b.end_date).slice(0,10);
+  let entries=[];
+  if(b.date_mode==='specific'&&Array.isArray(b.specific_dates)&&b.specific_dates.length){
+   entries=normalizeSpecificSchedule(b.specific_schedule||[],b.specific_dates,b.visits).map(x=>({date:x.date,count:['pet_sitter','pet_sitter_passeio'].includes(b.service)?x.visits:1}));
+  }else{
+   let end=b.service==='hospedagem'?addIsoDays(last,-1):last;
+   if(b.service==='vacinacao'||end<first)end=first;
+   for(let current=first;current<=end&&entries.length<1100;current=addIsoDays(current,1)){
+    entries.push({date:current,count:['pet_sitter','pet_sitter_passeio'].includes(b.service)?Math.max(1,Number(b.visits||1)):1});
+   }
+  }
+  const total=entries.reduce((n,e)=>n+e.count,0)||1,price=Number(b.estimated_total||0);
+  for(const item of entries){
+   if((from&&item.date<from)||(to&&item.date>to))continue;
+   const key=item.date.slice(0,7);
+   if(!result.has(key))result.set(key,{month:key,units:0,value:0,bookingIds:new Set()});
+   const target=result.get(key);
+   target.units+=item.count;target.value+=price*item.count/total;target.bookingIds.add(b.id);
+  }
+ }
+ return [...result.values()].sort((a,b)=>a.month.localeCompare(b.month)).map(x=>({month:x.month,units:x.units,bookings:x.bookingIds.size,value:Math.round(x.value*100)/100}));
+}
+app.get('/api/admin/clients',needAuth,needDb,async(_req,res)=>{try{
+ const q=await pool.query(`
+  WITH contacts AS (
+   SELECT b.*,regexp_replace(b.phone,'[^0-9]','','g') AS digits FROM cps_bookings b
+  ), ranked AS (
+   SELECT *,ROW_NUMBER() OVER(PARTITION BY digits ORDER BY start_date DESC,updated_at DESC) rownum,
+    COUNT(*) FILTER(WHERE status IN ('confirmed','completed')) OVER(PARTITION BY digits) total_services,
+    MAX(end_date) FILTER(WHERE status IN ('confirmed','completed')) OVER(PARTITION BY digits) last_service
+   FROM contacts WHERE length(digits)>=8
+  )
+  SELECT digits,tutor_name,phone,street,neighborhood,animals,animal_count,total_services,last_service
+  FROM ranked WHERE rownum=1
+  ORDER BY total_services DESC,last_service DESC NULLS LAST,tutor_name ASC LIMIT 500`);
+ res.json({clients:q.rows.map(x=>({id:x.digits,name:x.tutor_name,phone:x.phone,street:x.street,neighborhood:x.neighborhood,animals:x.animals,animalCount:Number(x.animal_count),bookings:Number(x.total_services),lastService:x.last_service}))});
+}catch(err){console.error('Clients',err);res.status(500).json({error:'Não foi possível carregar pessoas.'})}});
+
 app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
   const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))?String(v):null;
   const from=validDate(req.query.from),to=validDate(req.query.to);
@@ -326,33 +368,13 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
         WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
         AND ($3::text IS NULL OR b.service=$3::text)) clients`;
   const monthSql=`
-    WITH bounds AS (
-      SELECT COALESCE($1::date,(SELECT MIN(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses UNION ALL SELECT start_date FROM cps_bookings WHERE status='confirmed') dates),CURRENT_DATE)::date f,
-             COALESCE($2::date,(SELECT MAX(dt) FROM (SELECT paid_at dt FROM cps_payments UNION ALL SELECT occurred_at FROM cps_expenses UNION ALL SELECT start_date FROM cps_bookings WHERE status='confirmed') dates),CURRENT_DATE)::date t
-    ), months AS (
-      SELECT generate_series(date_trunc('month',f),date_trunc('month',t),interval '1 month') AS month_start FROM bounds
-    ), pay AS (
-      SELECT date_trunc('month',p.paid_at) m,SUM(p.amount) received
-      FROM cps_payments p LEFT JOIN cps_bookings b ON b.id=p.booking_id,bounds
-      WHERE p.paid_at BETWEEN bounds.f AND bounds.t AND ($3::text IS NULL OR b.service=$3::text)
-      GROUP BY 1
-    ), exp AS (
-      SELECT date_trunc('month',e.occurred_at) m,SUM(e.amount) expenses
-      FROM cps_expenses e,bounds WHERE e.occurred_at BETWEEN bounds.f AND bounds.t GROUP BY 1
-    ), rec AS (
-      SELECT date_trunc('month',b.start_date) m,
-             SUM(GREATEST(COALESCE(b.estimated_total,0)-COALESCE(pp.paid,0),0)) receivable
-      FROM cps_bookings b
-      LEFT JOIN (SELECT booking_id,SUM(amount) paid FROM cps_payments WHERE booking_id IS NOT NULL GROUP BY booking_id) pp ON pp.booking_id=b.id,
-           bounds
-      WHERE b.status='confirmed' AND b.start_date BETWEEN bounds.f AND bounds.t
-        AND ($3::text IS NULL OR b.service=$3::text)
-      GROUP BY 1
-    )
-    SELECT TO_CHAR(month_start,'YYYY-MM') AS month,
-           COALESCE(pay.received,0) received,COALESCE(rec.receivable,0) receivable,COALESCE(exp.expenses,0) expenses
-    FROM months LEFT JOIN pay ON pay.m=month_start LEFT JOIN rec ON rec.m=month_start LEFT JOIN exp ON exp.m=month_start ORDER BY month_start`;
-  const bookingCountSql=`
+ SELECT id,service,date_mode,specific_dates,specific_schedule,start_date,end_date,visits,estimated_total
+ FROM cps_bookings b WHERE status='completed'
+ AND ($1::date IS NULL OR b.end_date >= $1::date)
+ AND ($2::date IS NULL OR b.start_date <= $2::date)
+ AND ($3::text IS NULL OR b.service=$3::text)
+ ORDER BY start_date`;
+   const bookingCountSql=`
     SELECT service,COUNT(*) bookings FROM cps_bookings b
     WHERE ($1::date IS NULL OR b.end_date >= $1::date) AND ($2::date IS NULL OR b.start_date <= $2::date)
       AND ($3::text IS NULL OR b.service=$3::text)
@@ -375,7 +397,7 @@ app.get('/api/admin/dashboard',needAuth,needDb,async(req,res)=>{try{
   const keys=new Set([...counts.keys(),...revenues.keys()]);
   const byService=[...keys].filter(k=>k!=='unlinked').map(k=>({service:k,serviceLabel:SERVICE[k]||k,bookings:counts.get(k)||0,received:revenues.get(k)||0})).sort((a,b)=>b.received-a.received);
   if(revenues.has('unlinked'))byService.push({service:'unlinked',serviceLabel:'Recebimento sem vínculo',bookings:0,received:revenues.get('unlinked')||0});
-  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),receivable:Number(x.receivable),contracted:Number(x.contracted),bookings:Number(x.bookings)},monthly:m.rows.map(v=>({month:v.month,received:Number(v.received),receivable:Number(v.receivable),expenses:Number(v.expenses)})),byService,recent:r.rows.map(mapBooking)});
+  res.json({filter:{from,to,service},summary:{received:Number(x.received),expenses:Number(x.expenses),receivable:Number(x.receivable),contracted:Number(x.contracted),bookings:Number(x.bookings)},monthly:workByMonth(m.rows,from,to),byService,recent:r.rows.map(mapBooking)});
 }catch(e){console.error(e);res.status(500).json({error:'Não foi possível carregar o dashboard.'})}});
 app.get('/api/admin/calendar-events',needAuth,needDb,async(req,res)=>{try{
   const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))?String(v):null;
