@@ -332,7 +332,7 @@ app.get('/api/admin/clients',needAuth,needDb,async(_req,res)=>{try{
   ), ranked AS (
    SELECT *,ROW_NUMBER() OVER(PARTITION BY digits ORDER BY start_date DESC,updated_at DESC) rownum,
     COUNT(*) FILTER(WHERE status IN ('confirmed','completed')) OVER(PARTITION BY digits) total_services,
-    MAX(end_date) FILTER(WHERE status IN ('confirmed','completed')) OVER(PARTITION BY digits) last_service
+    MAX(end_date) FILTER(WHERE status='completed') OVER(PARTITION BY digits) last_service
    FROM contacts WHERE length(digits)>=8
   )
   SELECT digits,tutor_name,phone,street,neighborhood,animals,animal_count,total_services,last_service

@@ -54,7 +54,7 @@ async function loadDashboard(){
   const bar=n=>n>0?'<progress class="bar-progress received" max="'+max+'" value="'+n+'"></progress>':'<div class="bar-empty"></div>';
   $('#monthlyChart').innerHTML=j.monthly.length?j.monthly.map(x=>`
    <div class="month-group"><div class="month-title">${esc(x.month.slice(5))}/${esc(x.month.slice(2,4))}</div>
-   <div class="month-series"><span>Visitas / diárias</span><div class="bar-track">${bar(x.units)}</div><strong>${x.units}</strong></div>
+   <div class="month-series"><span>Atividades realizadas</span><div class="bar-track">${bar(x.units)}</div><strong>${x.units}</strong></div>
    <div class="month-work-detail"><span>${x.bookings} atendimento(s)</span><strong>${money.format(x.value)} em serviços</strong></div>
    </div>`).join(''):'<div class="empty">Nenhum atendimento concluído no período.</div>';
   $('#serviceBreakdown').innerHTML=j.byService?.length?`<table><thead><tr><th>Serviço</th><th>Atendimentos</th><th>Recebido</th></tr></thead><tbody>${j.byService.map(x=>`<tr><td>${esc(x.serviceLabel)}</td><td>${x.bookings}</td><td><strong>${money.format(x.received)}</strong></td></tr>`).join('')}</tbody></table>`:'<div class="empty">Ainda não há recebimentos vinculados a serviços nesse período.</div>'
